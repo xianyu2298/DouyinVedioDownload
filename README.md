@@ -1,4 +1,4 @@
-# DouyinDownloader（抖音无水印下载 Android App）
+# 抖净-DouyinDownload（抖音无水印下载 Android App）
 
 抖音无水印视频 / 图片 / Live 实况图下载 Android 原生应用（Java 后端 + Jetpack Compose 前端）
 本项目参考了 [halcyra/DYDownloader](https://github.com/halcyra/DYDownloader) 的算法而来，借助大佬的力量进行开发
@@ -77,7 +77,7 @@ downloaderBridge.download(profile, index, cookie, overrideType,
 - **限流风险**：抖音对单 IP 频繁请求会触发风控，短时间批量下载可能不全
 - **尊重版权**：下载内容请仅供个人学习欣赏
 
-## 🛠 环境要求
+## 🛠 编译环境要求
 
 - Android Studio Hedgehog (2023.1.1) 或更高版本
 - JDK 17（`compileOptions` / `kotlinOptions.jvmTarget = '17'`）
@@ -138,7 +138,7 @@ app/src/main/java/com/xianyu/vediodownload/
 
 本项目仅供本人学习研究，**严禁用于任何商业用途**。
 
-作者：懒得翻身的咸鱼 xianyu2298（基于 halcyra/DYDownloader 修改）。
+基于 halcyra/DYDownloader 修改
 
 用户使用本软件产生的一切行为，全部由使用者本人承担全部法律责任。
 因违规使用本软件造成的版权侵权、民事赔偿、行政处罚等一切后果，项目开发者不承担任何连带责任。
