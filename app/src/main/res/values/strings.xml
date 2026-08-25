@@ -18,7 +18,7 @@
     <string name="btn_download_audio">下载音频</string>
     <string name="btn_download_images">下载全部图片</string>
     <string name="btn_download_live_photo">下载Live静态封面</string>
-    <string name="btn_download_live_video">下载Live动态短片</string>
+    <string name="btn_download_live_video">下载全部Live动态短片</string>
 
     <!-- Cookie 设置对话框 -->
     <string name="cookie_dialog_title">设置抖音Cookie</string>

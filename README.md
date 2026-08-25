@@ -10,6 +10,10 @@
 Android 原生应用，纯 API 方案解析抖音作品，下载无水印视频到本地相册。
 **没有 WebView、没有 JS 注入、没有网络拦截**——所有解析逻辑都在 `DouyinDownloader.java`（Java）和 Compose UI 层（Kotlin）里完成。
 
+## 📱软件截图
+
+![截图](readme图片/截图.jpg)
+
 ## 🔧 技术原理
 
 ```
