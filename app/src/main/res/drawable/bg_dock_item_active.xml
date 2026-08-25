@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    bg_dock_item_active.xml - Dock Tab 选中状态
+    轻微高亮背景表示激活态
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/dock_item_active" />
+    <corners android:radius="20dp" />
+</shape>

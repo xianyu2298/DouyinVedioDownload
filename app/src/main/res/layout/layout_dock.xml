@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    layout_dock.xml - 底部悬浮 Dock 栏
+    4 个 Tab：视频 / 图片 / Live / 设置
+    选中态由代码控制（设置背景 bg_dock_item_active / bg_dock_item）
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/dockRoot"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:background="@drawable/bg_dock"
+    android:padding="6dp"
+    android:layout_marginStart="16dp"
+    android:layout_marginEnd="16dp"
+    android:layout_marginBottom="12dp">
+
+    <!-- Tab 0: 视频 -->
+    <FrameLayout
+        android:id="@+id/dockVideo"
+        android:layout_width="0dp"
+        android:layout_height="56dp"
+        android:layout_weight="1"
+        android:background="@drawable/bg_dock_item"
+        android:clickable="true"
+        android:focusable="true">
+        <ImageView
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_gravity="center"
+            android:src="@drawable/ic_video"
+            android:contentDescription="@null" />
+    </FrameLayout>
+
+    <!-- Tab 1: 图片 -->
+    <FrameLayout
+        android:id="@+id/dockImage"
+        android:layout_width="0dp"
+        android:layout_height="56dp"
+        android:layout_weight="1"
+        android:background="@drawable/bg_dock_item"
+        android:clickable="true"
+        android:focusable="true">
+        <ImageView
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_gravity="center"
+            android:src="@drawable/ic_image"
+            android:contentDescription="@null" />
+    </FrameLayout>
+
+    <!-- Tab 2: Live -->
+    <FrameLayout
+        android:id="@+id/dockLive"
+        android:layout_width="0dp"
+        android:layout_height="56dp"
+        android:layout_weight="1"
+        android:background="@drawable/bg_dock_item"
+        android:clickable="true"
+        android:focusable="true">
+        <ImageView
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_gravity="center"
+            android:src="@drawable/ic_live"
+            android:contentDescription="@null" />
+    </FrameLayout>
+
+    <!-- Tab 3: 设置 -->
+    <FrameLayout
+        android:id="@+id/dockSettings"
+        android:layout_width="0dp"
+        android:layout_height="56dp"
+        android:layout_weight="1"
+        android:background="@drawable/bg_dock_item"
+        android:clickable="true"
+        android:focusable="true">
+        <ImageView
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_gravity="center"
+            android:src="@drawable/ic_settings"
+            android:contentDescription="@null" />
+    </FrameLayout>
+
+</LinearLayout>

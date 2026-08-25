@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 抖音主题色 -->
+    <color name="douyin_pink">#FF2A5E</color>
+    <color name="douyin_pink_dark">#E02150</color>
+    <color name="douyin_black">#212121</color>
+    <color name="douyin_gray">#666666</color>
+    <color name="light_gray">#F5F5F5</color>
+
+    <!-- Logo 背景色 -->
+    <color name="ic_launcher_background">#FF4D00</color>
+
+    <!-- 主题色 -->
+    <color name="primary">#FF2A5E</color>
+    <color name="primary_dark">#E02150</color>
+    <color name="primary_variant">#D01E52</color>
+    <color name="secondary">#00F2EA</color>
+
+    <!-- 背景色 -->
+    <color name="background">#FFFFFF</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="card_background">#FAFAFA</color>
+
+    <!-- 文字颜色 -->
+    <color name="text_primary">#212121</color>
+    <color name="text_secondary">#757575</color>
+    <color name="text_hint">#9E9E9E</color>
+    <color name="text_on_primary">#FFFFFF</color>
+
+    <!-- 状态颜色 -->
+    <color name="success">#4CAF50</color>
+    <color name="error">#F44336</color>
+    <color name="warning">#FF9800</color>
+    <color name="info">#2196F3</color>
+
+    <!-- 按钮不可用 -->
+    <color name="button_disabled">#BDBDBB</color>
+
+    <!-- ========== Mist Teal 主题色 ========== -->
+    <!-- 薄雾青灰色系 (参考项目风格) -->
+    <color name="mist_teal_50">#FFE8F0F0</color>
+    <color name="mist_teal_100">#FFD2E0E1</color>
+    <color name="mist_teal_300">#FF92B5B7</color>
+    <color name="mist_teal_500">#FF6B9698</color>
+    <color name="mist_teal_700">#FF4D7577</color>
+    <color name="mist_teal_900">#FF2D4A4C</color>
+
+    <!-- 墨色文字 -->
+    <color name="ink_100">#FFEFF1F3</color>
+    <color name="ink_300">#FFC8CCD1</color>
+    <color name="ink_500">#FF8B939C</color>
+    <color name="ink_700">#FF4A525A</color>
+    <color name="ink_900">#FF1F2429</color>
+
+    <!-- 纸色背景 -->
+    <color name="paper_50">#FFF7F4EE</color>
+    <color name="paper_100">#FFF2EEE5</color>
+
+    <!-- 底部 Dock 颜色 -->
+    <color name="dock_bg">#F4F4F5</color>
+    <color name="dock_border">#E8E8EA</color>
+    <color name="dock_item_active">#EAEAEC</color>
+    <color name="dock_ripple">#1F6B9698</color>
+
+    <!-- 按钮按压反馈 -->
+    <color name="primary_ripple">#3D6B9698</color>
+    <color name="primary_ripple_secondary">#1F4A525A</color>
+</resources>

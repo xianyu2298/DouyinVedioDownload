@@ -1,0 +1,47 @@
+GNU AFFERO GENERAL PUBLIC LICENSE
+                       Version 3, 19 November 2007
+
+ Copyright (C) 2024-2026 halcyra (https://github.com/halcyra)
+ Copyright (C) 2026 VedioDownload contributors (xianyu2298)
+
+ 本项目 (VedioDownload) 是基于 halcyra/DYDownloader 修改而来的衍生作品，
+ 完整署名及衍生关系说明见根目录 NOTICE 文件。
+
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU Affero General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU Affero General Public License for more details.
+
+ You should have received a copy of the GNU Affero General Public License
+ along with this program.  If not, see <https://www.gnu.org/licenses/agpl-3.0.txt>.
+
+================================================================================
+
+根据 AGPL-3.0 条款第 5 条 "Conveying Modified Source Versions"：
+
+1. 你必须保留本 LICENSE 与 NOTICE 文件
+2. 你必须在分发时提供完整源代码（包括本项目所有修改后的源码）
+3. 你必须在显著位置（启动页 / 关于页面 / 仓库 README）标注：
+     本项目基于 halcyra/DYDownloader 修改
+4. 你必须向终端用户告知可通过以下链接获取完整源代码：
+     - 原项目：https://github.com/halcyra/DYDownloader
+     - 本项目源代码：见本项目仓库（请在 README 中填入实际仓库地址）
+
+完整 AGPL-3.0 协议请见：
+  - 中文：https://www.gnu.org/licenses/agpl-3.0.zh-cn.html
+  - 英文：https://www.gnu.org/licenses/agpl-3.0.txt
+
+================================================================================
+
+⚠️ 免责声明 ⚠️
+
+1. 本项目仅供个人技术学习使用，禁止商用
+2. 不得用于侵犯版权、批量爬取、未授权传播或其他违法违规用途
+3. 下载的内容仅供个人学习研究，请尊重版权
+4. 用户对使用本项目产生的所有后果承担全部责任，与原作者 halcyra 及
+   VedioDownload 贡献者无关

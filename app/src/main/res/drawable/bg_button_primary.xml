@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    bg_button_ripple.xml - Material 风格按钮按压反馈
+    按压时轻微缩放视觉暗示（配合 Android:stateListAnimator）
+-->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/primary_ripple">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/mist_teal_500" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+</ripple>

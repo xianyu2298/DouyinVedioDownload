@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    AndroidManifest.xml - 抖音无水印下载器 Demo (V3)
+
+    ⚠️ 仅供个人技术学习使用，禁止商用
+
+    本项目基于 halcyra/DYDownloader (AGPL-3.0) 修改而来。
+    详细版权声明见 NOTICE 文件。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- ==================== 网络权限 ==================== -->
+    <!-- 允许应用访问网络，进行 WebView 加载和数据下载 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- 允许检查网络连接状态 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- ==================== 存储权限 ==================== -->
+    <!--
+        Android 版本兼容说明：
+        - Android 13 (API 33) 及以上：使用新的媒体权限
+        - Android 12 (API 32) 及以下：使用旧的存储权限
+    -->
+
+    <!-- Android 13+ 视频权限 -->
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_VIDEO"
+        android:minSdkVersion="33" />
+
+    <!-- Android 13+ 图片权限 -->
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_IMAGES"
+        android:minSdkVersion="33" />
+
+    <!-- Android 13+ 音频权限 -->
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_AUDIO"
+        android:minSdkVersion="33" />
+
+    <!--
+        Android 12 及以下存储权限
+        maxSdkVersion="32" 表示该权限只在 API <= 32 时生效
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"
+        tools:ignore="ScopedStorage" />
+
+    <!--
+        Android 12 及以下读取外部存储权限（部分设备需要）
+        仅在 API <= 32 时生效
+    -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!-- ==================== 通知权限 ==================== -->
+    <!--
+        后台下载通知需要该权限。
+        Android 13+ (API 33+) 需要运行时申请；<= 12 系统会自动授予。
+    -->
+    <uses-permission
+        android:name="android.permission.POST_NOTIFICATIONS"
+        android:minSdkVersion="33" />
+
+    <!-- 前台服务（Android 9+ 起通知下载进度需要声明） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- ==================== 应用配置 ==================== -->
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.VedioDownload"
+        android:usesCleartextTraffic="true"
+        tools:targetApi="31">
+
+        <!-- 主 Activity -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 抖音一键登录 Activity（WebView 抓 Cookie） -->
+        <activity
+            android:name=".DouyinLoginActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustResize"/>
+
+        <!-- 视频播放器 Activity（全屏沉浸） -->
+        <activity
+            android:name=".ui.player.VideoPlayerActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@style/Theme.VedioDownload.Fullscreen"/>
+
+        <!-- 图片预览 Activity（全屏沉浸） -->
+        <activity
+            android:name=".ui.player.ImagePreviewActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@style/Theme.VedioDownload.Fullscreen"/>
+
+        <!-- Live图预览 Activity（全屏沉浸） -->
+        <activity
+            android:name=".ui.player.LivePhotoPreviewActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@style/Theme.VedioDownload.Fullscreen"/>
+
+    </application>
+
+</manifest>
