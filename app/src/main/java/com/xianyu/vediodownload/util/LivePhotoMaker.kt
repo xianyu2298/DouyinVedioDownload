@@ -6,17 +6,24 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import android.util.Log
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
+
 /**
  * Live 图（Google Motion Photo）合成器
  *
- * 对齐 https://github.com/hellodk34/make_motion_photo 的 Python 实现
+ * 实现原理：
+ * 1. 从视频中提取一帧作为 JPEG 封面
+ * 2. 将视频编码为 MP4（H.264 + AAC）
+ * 3. 生成 XMP 元数据，描述 Motion Photo 结构
+ * 4. 将 XMP 注入 JPEG APP1 段（跳过已有标记段，插入到正确位置）
+ * 5. 将带 XMP 的 JPEG 与 MP4 拼接为 .MP.JPG 文件
+ *
+ * 严格对齐 Python 脚本 make_motion_photo.py 的逻辑。
  */
 object LivePhotoMaker {
 
@@ -25,32 +32,23 @@ object LivePhotoMaker {
     data class QualityPreset(
         val crf: Int,
         val audioBitrate: String,
-        val preset: String?
+        val preset: String
     )
 
-    val QUALITY_COMPACT = QualityPreset(crf = 28, audioBitrate = "96k", preset = null)
-    val QUALITY_BALANCED = QualityPreset(crf = 23, audioBitrate = "128k", preset = null)
-    val QUALITY_PRISTINE = QualityPreset(crf = 18, audioBitrate = "256k", preset = null)
-
-    /** 分辨率映射：仅降采样，不升采样 */
-    private val RESIZE_MAP = mapOf(
-        "480p" to 480,
-        "720p" to 720,
-        "1080p" to 1080,
-        "1440p" to 1440,
-        "2160p" to 2160
-    )
+    val QUALITY_COMPACT = QualityPreset(crf = 28, audioBitrate = "96k", preset = "medium")
+    val QUALITY_BALANCED = QualityPreset(crf = 23, audioBitrate = "128k", preset = "medium")
+    val QUALITY_PRISTINE = QualityPreset(crf = 18, audioBitrate = "256k", preset = "slow")
 
     /**
      * 合成 Live 图
      *
      * @param context Android 上下文
-     * @param videoPath 输入视频路径
-     * @param coverPath 可选的封面图片路径（如果为 null，从视频中按 presentationTimestampUs 抽帧）
+     * @param videoPath 视频文件路径
+     * @param coverPath 可选的封面图片路径（如果为 null，从视频中提取第一帧）
      * @param outputFileName 输出文件名（不含扩展名）
      * @param quality 质量预设
      * @param presentationTimestampUs 视频开始播放的时间戳（微秒），默认 1000000（1秒后开始）
-     * @param resize 输出视频高度（480p/720p/1080p/1440p/2160p），null 则保持原始分辨率
+     * @param resize 可选的输出视频高度预设（"480p"/"720p"/"1080p"/"1440p"/"2160p"），不放大
      * @param onProgress 进度回调（0-100）
      * @return 合成后的文件路径，失败返回 null
      */
@@ -66,82 +64,54 @@ object LivePhotoMaker {
     ): String? {
         val tmpDir = File(context.cacheDir, "live_photo_tmp")
         tmpDir.mkdirs()
-
         try {
             onProgress?.invoke(5)
-            Log.i(TAG, "=== start createMotionPhoto ===")
-            Log.i(TAG, "videoPath=$videoPath, coverPath=$coverPath, resize=$resize")
 
-            // 1. 解析 resize 参数
-            val targetHeight = resize?.let { RESIZE_MAP[it] }
-            if (resize != null && targetHeight == null) {
-                Log.e(TAG, "Invalid resize: $resize")
-                return null
-            }
-            Log.i(TAG, "targetHeight=$targetHeight")
-
-            // 2. 提取或加载封面图片
+            // 1. 提取或加载封面图片
             val coverFile = File(tmpDir, "cover.jpg")
             if (coverPath != null && File(coverPath).exists()) {
                 File(coverPath).copyTo(coverFile, overwrite = true)
-                Log.i(TAG, "cover copied from $coverPath")
             } else {
-                val ok = extractCoverFrame(context, videoPath, coverFile, presentationTimestampUs)
-                Log.i(TAG, "extractCoverFrame=$ok, file=${coverFile.absolutePath}, exists=${coverFile.exists()}, size=${if (coverFile.exists()) coverFile.length() else -1}")
-                if (!ok || !coverFile.exists()) return null
+                extractCoverFrame(context, videoPath, coverFile, presentationTimestampUs)
             }
             onProgress?.invoke(25)
 
-            // 3. 编码视频
+            // 2. 编码视频为 MP4
             val encodedMp4 = File(tmpDir, "video.mp4")
-            if (!encodeVideo(
-                    context = context,
-                    inputPath = videoPath,
-                    outputFile = encodedMp4,
-                    quality = quality,
-                    targetHeight = targetHeight,
-                    onProgress = onProgress
-                )
-            ) {
-                Log.e(TAG, "encodeVideo failed")
+            val maxHeight = resize?.let { RESIZE_MAP[it] }
+            if (resize != null && maxHeight == null) {
+                throw IllegalArgumentException("Unknown resize preset: $resize")
+            }
+            if (!encodeVideo(context, videoPath, encodedMp4, quality, maxHeight, onProgress)) {
                 return null
             }
             val mp4Size = encodedMp4.length()
-            Log.i(TAG, "encoded MP4 size=$mp4Size")
             onProgress?.invoke(75)
 
-            // 4. 生成 XMP APP1 段
+            // 3. 生成 XMP APP1 段（marker + length + identifier + xmp payload）
             val xmpSegment = buildXmpApp1Segment(mp4Size, presentationTimestampUs)
-            Log.i(TAG, "XMP segment size=${xmpSegment.size}")
 
-            // 5. 将 XMP 注入 JPEG
+            // 4. 将 XMP 注入 JPEG：跳过已有的标记段，在正确位置插入
             val jpegWithXmp = File(tmpDir, "with_xmp.jpg")
             injectXmp(coverFile, xmpSegment, jpegWithXmp)
-            Log.i(TAG, "after injectXmp, size=${jpegWithXmp.length()}")
+            onProgress?.invoke(85)
 
-            // 6. 拼接 JPEG + MP4
+            // 5. 拼接 JPEG + MP4
             val outputFile = File(tmpDir, "output.mp.jpg")
             concatenateFiles(jpegWithXmp, encodedMp4, outputFile)
-            Log.i(TAG, "final output size=${outputFile.length()}")
             onProgress?.invoke(95)
 
-            // 7. 保存到相册
+            // 6. 保存到相册
             val finalPath = saveToGallery(context, outputFile, outputFileName)
-            Log.i(TAG, "saved to gallery: $finalPath")
             onProgress?.invoke(100)
-
             return finalPath
-        } catch (e: Exception) {
-            Log.e(TAG, "createMotionPhoto exception", e)
-            return null
         } finally {
             tmpDir.deleteRecursively()
         }
     }
 
     /**
-     * 提取视频封面帧（与 Python 脚本保持一致）
-     * 使用 ffmpeg: ffmpeg -y -i video -ss <ts> -vframes 1 -q:v 2 cover.jpg
+     * 提取视频封面帧
      */
     private fun extractCoverFrame(
         context: Context,
@@ -161,16 +131,13 @@ object LivePhotoMaker {
 
     /**
      * 编码视频为 MP4
-     * 与 Python 脚本的 ffmpeg 命令保持一致：
-     *   ffmpeg -y -i input -c:v libx264 [-preset X] -crf X -pix_fmt yuv420p
-     *          -c:a aac -b:a X [-vf scale=-2:H] -movflags +faststart output.mp4
      */
     private fun encodeVideo(
         context: Context,
         inputPath: String,
         outputFile: File,
         quality: QualityPreset,
-        targetHeight: Int? = null,
+        maxHeight: Int? = null,
         onProgress: ((Int) -> Unit)? = null
     ): Boolean {
         return FFmpegUtils.encodeToMp4(
@@ -180,7 +147,7 @@ object LivePhotoMaker {
             crf = quality.crf,
             audioBitrate = quality.audioBitrate,
             preset = quality.preset,
-            maxHeight = targetHeight,
+            maxHeight = maxHeight,
             onProgress = { progress ->
                 onProgress?.invoke(25 + (progress * 0.5).toInt())
             }
@@ -188,131 +155,110 @@ object LivePhotoMaker {
     }
 
     /**
+     * 分辨率预设映射（与 Python 脚本 RESIZE_MAP 保持一致）
+     */
+    private val RESIZE_MAP = mapOf(
+        "480p" to 480,
+        "720p" to 720,
+        "1080p" to 1080,
+        "1440p" to 1440,
+        "2160p" to 2160
+    )
+
+    /**
+     * 构建 XMP 元数据字符串
+     *
+     * 严格对齐 Python build_xmp() 的输出格式（缩进、换行、xmlns）。
+     */
+    private fun buildXmp(mp4Size: Long, presentationTimestampUs: Long): String {
+        return """<x:xmpmeta xmlns:x="adobe:ns:meta/">
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+             xmlns:Camera="http://ns.google.com/photos/1.0/camera/"
+             xmlns:Container="http://ns.google.com/photos/1.0/container/"
+             xmlns:Item="http://ns.google.com/photos/1.0/container/item/">
+        <rdf:Description
+            Camera:MotionPhoto="1"
+            Camera:MotionPhotoVersion="1"
+            Camera:MotionPhotoPresentationTimestampUs="$presentationTimestampUs">
+            <Container:Directory>
+                <rdf:Seq>
+                    <rdf:li rdf:parseType="Resource">
+                        <Container:Item Item:Mime="image/jpeg"
+                                        Item:Semantic="Primary"
+                                        Item:Length="0"
+                                        Item:Padding="0"/>
+                    </rdf:li>
+                    <rdf:li rdf:parseType="Resource">
+                        <Container:Item Item:Mime="video/mp4"
+                                        Item:Semantic="MotionPhoto"
+                                        Item:Length="$mp4Size"
+                                        Item:Padding="0"/>
+                    </rdf:li>
+                </rdf:Seq>
+            </Container:Directory>
+        </rdf:Description>
+    </rdf:RDF>
+</x:xmpmeta>"""
+    }
+
+    /**
      * 构建 XMP APP1 段
-     * 与 Python 脚本的 make_xmp_app1_segment 完全一致
+     *
+     * 结构：FF E1 | Length(2 bytes, big-endian) | "http://ns.adobe.com/xap/1.0/\0" | XMP
+     * 严格使用 ByteBuffer 保证大端字节序，对齐 Python 的 struct.pack(">H", length)。
      */
     private fun buildXmpApp1Segment(mp4Size: Long, presentationTimestampUs: Long): ByteArray {
         val xmpStr = buildXmp(mp4Size, presentationTimestampUs)
         val xmpBytes = xmpStr.toByteArray(Charsets.UTF_8)
 
-        // APP1 marker: 0xFF 0xE1
-        // Identifier: "http://ns.adobe.com/xap/1.0/\x00" (29 bytes)
+        // APP1 标识符："http://ns.adobe.com/xap/1.0/\0"（29 字节，US-ASCII）
         val identifier = "http://ns.adobe.com/xap/1.0/\u0000".toByteArray(Charsets.US_ASCII)
-        val app1Data = identifier + xmpBytes
 
-        // Length: 2 bytes (includes length field itself, but not the marker)
+        val app1Data = identifier + xmpBytes
+        // length 字段包含 length 本身 2 字节，但不包含 marker
         val length = app1Data.size + 2
 
-        val buffer = ByteBuffer.allocate(2 + 2 + app1Data.size)
-        buffer.order(ByteOrder.BIG_ENDIAN)
-        buffer.put(0xFF.toByte())
-        buffer.put(0xE1.toByte())
-        buffer.putShort(length.toShort())
-        buffer.put(app1Data)
+        // 使用 ByteBuffer 显式指定 BIG_ENDIAN 字节序写入 2 字节长度
+        val lengthBytes = ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort(length.toShort()).array()
 
-        return buffer.array()
+        val result = ByteArray(2 + 2 + app1Data.size)
+        result[0] = 0xFF.toByte()
+        result[1] = 0xE1.toByte()
+        System.arraycopy(lengthBytes, 0, result, 2, 2)
+        System.arraycopy(app1Data, 0, result, 4, app1Data.size)
+        return result
     }
 
     /**
-     * 构建 XMP 元数据字符串
-     * 严格对齐 Python 脚本 build_xmp 的格式
-     */
-    private fun buildXmp(mp4Size: Long, presentationTimestampUs: Long): String {
-        return """
-<?xml version="1.0" encoding="UTF-8"?>
- <x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 5.6.0">
-  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-   <rdf:Description rdf:about=""
-    xmlns:Camera="http://ns.google.com/photos/1.0/camera/"
-    xmlns:Container="http://ns.google.com/photos/1.0/container/"
-    xmlns:Item="http://ns.google.com/photos/1.0/container/item/"
-    Camera:MotionPhotoVersion="1"
-    Camera:MotionPhoto="1"
-    Camera:MotionPhotoPresentationTimestampUs="$presentationTimestampUs">
-    <Container:Directory>
-     <rdf:Seq>
-      <rdf:li rdf:parseType="Resource">
-       <Container:Item Item:Mime="image/jpeg" Item:Semantic="Primary"/>
-      </rdf:li>
-      <rdf:li rdf:parseType="Resource">
-       <Container:Item Item:Mime="video/mp4" Item:Semantic="MotionPhoto" Item:Length="$mp4Size"/>
-      </rdf:li>
-     </rdf:Seq>
-    </Container:Directory>
-   </rdf:Description>
-  </rdf:RDF>
- </x:xmpmeta>
- """.trimIndent()
-    }
-
-    /**
-     * 将 XMP 注入 JPEG 文件
-     * 与 Python 脚本的 inject_xmp 逻辑一致：
-     *   - 验证 SOI
-     *   - 跳过现有 APP 段 (0xE0-0xEF)、DQT (0xDB)、DHT (0xC4)、COM (0xFE) 等
-     *   - 在 SOI 之后插入 XMP
+     * 将 XMP APP1 段注入 JPEG
+     *
+     * 对齐 Python inject_xmp() 实际行为：
+     * 1. 校验 SOI（FF D8）
+     * 2. 无条件把 XMP 段插在 SOI 之后（Python 脚本虽然算了 pos，但最终用的是 data[:2] + xmp + data[2:]）
+     *
+     * 这样保证 XMP APP1 紧跟 SOI，是所有 JPEG 处理器的标准位置，
+     * 其他相册（Samsung/Xiaomi/华为等）的 Motion Photo 检测器期望 XMP 在所有 APP 段之前。
      */
     private fun injectXmp(inputJpeg: File, xmpSegment: ByteArray, outputJpeg: File) {
         val data = inputJpeg.readBytes()
 
-        // 验证 JPEG SOI 标记
+        // 校验 JPEG SOI 标记
         if (data.size < 2 || data[0] != 0xFF.toByte() || data[1] != 0xD8.toByte()) {
             throw IllegalArgumentException("Not a valid JPEG file")
         }
 
-        // 找到插入位置：跳过 SOI 和现有的标记段
-        var pos = 2
-        while (pos < data.size) {
-            if (data[pos] != 0xFF.toByte()) break
-
-            val marker = data[pos + 1]
-
-            // SOI 不应再次出现
-            if (marker == 0xD8.toByte()) break
-            // EOI - 到达文件末尾
-            if (marker == 0xD9.toByte()) break
-            // 填充字节
-            if (marker == 0x00.toByte()) {
-                pos += 2
-                continue
-            }
-
-            // 跳过带长度的标记段
-            // APP0-APP15 (0xE0-0xEF), DQT (0xDB), DHT (0xC4), COM (0xFE),
-            // SOF0-15 (0xC0-0xCF, except DHT=0xC4), DRI (0xDD)
-            val hasLength = when {
-                marker.toInt() and 0xF0 == 0xE0 -> true  // APPn
-                marker == 0xDB.toByte() -> true          // DQT
-                marker == 0xC4.toByte() -> true          // DHT
-                marker == 0xFE.toByte() -> true          // COM
-                marker.toInt() and 0xF0 == 0xC0 && marker != 0xC4.toByte() -> true // SOF
-                marker == 0xDD.toByte() -> true          // DRI
-                else -> false
-            }
-
-            if (hasLength) {
-                if (pos + 4 > data.size) break
-                val segLen = ((data[pos + 2].toInt() and 0xFF) shl 8) or
-                        (data[pos + 3].toInt() and 0xFF)
-                pos += 2 + segLen
-                continue
-            }
-
-            // SOS (0xDA) 或其他无长度标记，停止扫描
-            break
-        }
-
-        // 插入 XMP：在 SOI 之后、现有段之前
+        // 严格对齐 Python: result = data[:2] + xmp_segment + data[2:]
+        // 即把 XMP 段无条件插在 SOI 之后
         val result = ByteArray(data.size + xmpSegment.size)
-        System.arraycopy(data, 0, result, 0, pos)
-        System.arraycopy(xmpSegment, 0, result, pos, xmpSegment.size)
-        System.arraycopy(data, pos, result, pos + xmpSegment.size, data.size - pos)
+        System.arraycopy(data, 0, result, 0, 2)
+        System.arraycopy(xmpSegment, 0, result, 2, xmpSegment.size)
+        System.arraycopy(data, 2, result, 2 + xmpSegment.size, data.size - 2)
 
         outputJpeg.writeBytes(result)
     }
 
     /**
-     * 拼接两个文件：JPEG + MP4
+     * 拼接两个文件
      */
     private fun concatenateFiles(file1: File, file2: File, output: File) {
         FileOutputStream(output).use { fos ->
@@ -326,52 +272,37 @@ object LivePhotoMaker {
      */
     private fun saveToGallery(context: Context, file: File, fileName: String): String? {
         val finalName = "$fileName.MP.JPG"
-
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val contentValues = ContentValues().apply {
                 put(MediaStore.Images.Media.DISPLAY_NAME, finalName)
                 put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                put(
-                    MediaStore.Images.Media.RELATIVE_PATH,
-                    Environment.DIRECTORY_PICTURES + "/LivePhotos"
-                )
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/LivePhotos")
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
-
             val resolver = context.contentResolver
-            val uri = resolver.insert(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues
-            ) ?: return null
-
+            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+                ?: return null
             resolver.openOutputStream(uri)?.use { outputStream ->
                 FileInputStream(file).use { inputStream ->
                     inputStream.copyTo(outputStream)
                 }
             }
-
             contentValues.clear()
             contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
             resolver.update(uri, contentValues, null, null)
-
             uri.toString()
         } else {
             @Suppress("DEPRECATION")
-            val picturesDir = Environment.getExternalStoragePublicDirectory(
-                Environment.DIRECTORY_PICTURES
-            )
+            val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
             val livePhotosDir = File(picturesDir, "LivePhotos")
             livePhotosDir.mkdirs()
-
             val destFile = File(livePhotosDir, finalName)
             file.copyTo(destFile, overwrite = true)
-
-            MediaStore.Images.Media.insertImage(
-                context.contentResolver,
-                destFile.absolutePath,
-                finalName,
-                "Live Photo"
+            // 通知媒体库扫描该文件
+            context.sendBroadcast(
+                android.content.Intent(android.content.Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
+                    .setData(Uri.fromFile(destFile))
             )
-
             destFile.absolutePath
         }
     }
@@ -381,19 +312,19 @@ object LivePhotoMaker {
      */
     fun getFilePathFromUri(context: Context, uri: Uri): String? {
         return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                    val tempFile = File(
-                        context.cacheDir,
-                        "temp_${System.currentTimeMillis()}.mp4"
-                    )
-                    FileOutputStream(tempFile).use { outputStream ->
-                        inputStream.copyTo(outputStream)
+            when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
+                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        val tempFile = File(context.cacheDir, "temp_${System.currentTimeMillis()}.mp4")
+                        FileOutputStream(tempFile).use { outputStream ->
+                            inputStream.copyTo(outputStream)
+                        }
+                        tempFile.absolutePath
                     }
-                    tempFile.absolutePath
                 }
-            } else {
-                uri.path
+                else -> {
+                    uri.path
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()

@@ -134,12 +134,6 @@ data class LivePhotoPair(
 
 private const val ALBUM_NAME = "DouyinDownloader"
 
-private val VIDEO_EXTS = setOf("mp4", "mov", "m4v")
-private val IMAGE_EXTS = setOf("jpg", "jpeg", "png", "webp", "heic")
-
-private fun File.isVideoFile(): Boolean = extension.lowercase(Locale.ROOT) in VIDEO_EXTS
-private fun File.isImageFile(): Boolean = extension.lowercase(Locale.ROOT) in IMAGE_EXTS
-
 private fun HistoryItem.creationTimeMillis(): Long = dateAddedMillis * 1000L
 
 // ---------- 主入口：历史记录主页 ----------
@@ -346,9 +340,7 @@ fun HistoryListScreen(
         }
     }
 
-    val allSelected by derivedStateOf {
-        items.isNotEmpty() && items.all { it.id in selected }
-    }
+    val allSelected by derivedStateOf { items.isNotEmpty() && items.all { it.id in selected } }
     var pendingDelete by remember { mutableStateOf(false) }
 
     if (pendingDelete) {
@@ -392,10 +384,13 @@ fun HistoryListScreen(
                 allSelected = allSelected,
                 selectedCount = selected.size,
                 onToggleSelectAll = {
-                    if (allSelected) selected.clear()
-                    else {
+                    if (allSelected) {
                         selected.clear()
-                        selected.addAll(items.map { it.id }.distinct())
+                    } else {
+                        // 仅补齐尚未选中的项，避免手动选了部分后再次全选导致重复追加。
+                        items.forEach { item ->
+                            if (item.id !in selected) selected.add(item.id)
+                        }
                     }
                 },
                 onDelete = { pendingDelete = true },
@@ -489,9 +484,7 @@ fun HistoryLivePhotoListScreen(
         }
     }
 
-    val allSelected by derivedStateOf {
-        pairs.isNotEmpty() && pairs.all { it.baseName in selected }
-    }
+    val allSelected by derivedStateOf { pairs.isNotEmpty() && pairs.all { it.baseName in selected } }
     var pendingDelete by remember { mutableStateOf(false) }
 
     if (pendingDelete) {
@@ -540,10 +533,13 @@ fun HistoryLivePhotoListScreen(
                 allSelected = allSelected,
                 selectedCount = selected.size,
                 onToggleSelectAll = {
-                    if (allSelected) selected.clear()
-                    else {
+                    if (allSelected) {
                         selected.clear()
-                        selected.addAll(pairs.map { it.baseName }.distinct())
+                    } else {
+                        // 仅补齐尚未选中的项，避免手动选了部分后再次全选导致重复追加。
+                        pairs.forEach { pair ->
+                            if (pair.baseName !in selected) selected.add(pair.baseName)
+                        }
                     }
                 },
                 onDelete = { pendingDelete = true },
@@ -935,32 +931,37 @@ private fun rootMediaStorePrefix(): String =
 
 /** 按类别扫对应子目录。 */
 private fun scanCategory(context: Context, category: HistoryCategory): List<HistoryItem> {
-    // 统一走文件系统扫描，避免 MediaStore 在不同 Android 版本 / OEM 上
-    // 因为 RELATIVE_PATH 规范化、IS_PENDING、卷选择等原因导致历史记录条数
-    // 与文件管理器看到的物理文件数对不上。
-    return scanViaFileSystem(category)
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        scanViaMediaStore(context, category)
+    } else {
+        scanViaFileSystem(category)
+    }
 }
 
 /**
- * Live 下载记录：扫 Movies/DouyinDownloader/LivePicturesMovies/ 下的文件，
- * 按文件名（去扩展名）配对，同名视频+封面作为一组展示。
+ * Live 下载记录：只扫 Movies/DouyinDownloader/LivePicturesMovies/ 下的动态短片。
+ * 封面（如果有下载且同名）作为可选项填充，不强制配对。
  */
 private fun scanLivePhotoPairs(context: Context): List<LivePhotoPair> {
-    val videos = scanViaFileSystem(HistoryCategory.LIVE_VIDEO)
-        .sortedByDescending { it.dateAddedMillis }
+    val videos = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        scanViaMediaStore(context, HistoryCategory.LIVE_VIDEO)
+    } else {
+        scanViaFileSystem(HistoryCategory.LIVE_VIDEO)
+    }.sortedByDescending { it.dateAddedMillis }
 
-    val imagesByBase = scanViaFileSystem(HistoryCategory.LIVE_IMAGE)
-        .associateBy { stripExt(it.displayName) }
+    val imagesByBase = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        scanViaMediaStore(context, HistoryCategory.LIVE_IMAGE)
+    } else {
+        scanViaFileSystem(HistoryCategory.LIVE_IMAGE)
+    }.associateBy { stripExt(it.displayName) }
 
-    return videos
-        .groupBy { stripExt(it.displayName) }
-        .map { (baseName, sameBase) ->
-            LivePhotoPair(
-                baseName = baseName,
-                image = imagesByBase[baseName],
-                video = sameBase.first(),
-            )
-        }
+    return videos.map { video ->
+        LivePhotoPair(
+            baseName = stripExt(video.displayName),
+            image = imagesByBase[stripExt(video.displayName)],
+            video = video,
+        )
+    }
 }
 
 private fun extOf(name: String): String =
@@ -987,12 +988,6 @@ private fun scanViaMediaStore(context: Context, category: HistoryCategory): List
         MediaStore.MediaColumns.RELATIVE_PATH,
     )
 
-    // 注意：Android 系统对 Video 类型会强制把 RELATIVE_PATH 顶层规范成 Movies/，
-    // 所以 VIDEO 实际存到 Movies/DouyinDownloader/（根目录，无子目录），
-    // LIVE_VIDEO 存到 Movies/DouyinDownloader/LivePicturesMovies/，
-    // IMAGE / LIVE_IMAGE 存到 Pictures/DouyinDownloader/Pictures/。
-    //
-    // VIDEO 用 NOT LIKE 排除掉 LivePicturesMovies/ 这类子目录，避免普通视频列表混入 Live 视频。
     val relativePrefix = when (category) {
         HistoryCategory.VIDEO ->
             "${Environment.DIRECTORY_MOVIES}/DouyinDownloader/%"
@@ -1001,27 +996,26 @@ private fun scanViaMediaStore(context: Context, category: HistoryCategory): List
         else ->
             "${rootMediaStorePrefix()}${category.mediaStoreRelativePath}/%"
     }
-    val selection = when (category) {
-        HistoryCategory.VIDEO ->
-            "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? AND " +
-                    "${MediaStore.MediaColumns.RELATIVE_PATH} NOT LIKE ?"
-        else ->
-            "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?"
-    }
-    val selectionArgs = when (category) {
-        HistoryCategory.VIDEO -> arrayOf(
-            relativePrefix,
-            "${Environment.DIRECTORY_MOVIES}/DouyinDownloader/%/%",
-        )
-        else -> arrayOf(relativePrefix)
-    }
+
+    // VIDEO 列表严格限制在 "Movies/DouyinDownloader/ 直接子层" 上，把
+    // Movies/DouyinDownloader/LivePicturesMovies/ 这种 Live 动态短片子目录排除。
+    // 不能用 "%/%" 配多级：Movies/DouyinDownloader/ 自身带尾斜杠就会被它一刀切掉。
+    // 这里改成"RELATIVE_PATH 等于 Movies/DouyinDownloader/ 或以 Movies/DouyinDownloader/xxx.mp4 形式结尾"，
+    // 即排除包含 LivePicturesMovies/ 的路径。
+    val videoNotLike = "${Environment.DIRECTORY_MOVIES}/DouyinDownloader/${HistoryCategory.LIVE_VIDEO.mediaStoreRelativePath}/%"
 
     val out = mutableListOf<HistoryItem>()
     context.contentResolver.query(
         collection,
         projection,
-        selection,
-        selectionArgs,
+        if (category == HistoryCategory.VIDEO) {
+            "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? AND " +
+                    "${MediaStore.MediaColumns.RELATIVE_PATH} NOT LIKE ?"
+        } else {
+            "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?"
+        },
+        if (category == HistoryCategory.VIDEO) arrayOf(relativePrefix, videoNotLike)
+        else arrayOf(relativePrefix),
         "${MediaStore.MediaColumns.DATE_ADDED} DESC",
     )?.use { cursor ->
         val idCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
@@ -1041,23 +1035,24 @@ private fun scanViaMediaStore(context: Context, category: HistoryCategory): List
 }
 
 private fun scanViaFileSystem(category: HistoryCategory): List<HistoryItem> {
-    val dir: File = when (category) {
-        HistoryCategory.VIDEO ->
-            File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
-                "DouyinDownloader",
-            )
-        HistoryCategory.LIVE_VIDEO ->
-            File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
-                "DouyinDownloader/LivePicturesMovies",
-            )
-        else ->
-            File(rootBaseDir(), category.fileSystemChild)
+    // 视频类在 Movies/DouyinDownloader/ 下，图片类在 Pictures/DouyinDownloader/ 下
+    val dir: File = if (category == HistoryCategory.VIDEO) {
+        File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+            "DouyinDownloader",
+        )
+    } else if (category == HistoryCategory.LIVE_VIDEO) {
+        File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+            "DouyinDownloader/LivePicturesMovies",
+        )
+    } else {
+        File(rootBaseDir(), category.fileSystemChild)
     }
     if (!dir.exists()) return emptyList()
     val files = dir.listFiles() ?: return emptyList()
     return files
+        .filter { it.isFile }
         .sortedByDescending { it.lastModified() }
         .mapIndexed { index, file ->
             HistoryItem(
@@ -1080,7 +1075,6 @@ private fun clearAllDownloads(context: Context): Int {
 
 private fun clearAllViaMediaStore(context: Context): Int {
     var total = 0
-    // 视频、图片、Live 图视频各自走各自子目录
     for (category in listOf(
         HistoryCategory.VIDEO,
         HistoryCategory.IMAGE,
@@ -1093,7 +1087,6 @@ private fun clearAllViaMediaStore(context: Context): Int {
                 MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
             HistoryCategory.LIVE_IMAGE -> continue
         }
-        // 视频类（VIDEO / LIVE_VIDEO）的 RELATIVE_PATH 顶层规范为 Movies/，图片类为 Pictures/。
         val relativePrefix = when (category) {
             HistoryCategory.LIVE_VIDEO ->
                 "${Environment.DIRECTORY_MOVIES}/DouyinDownloader/${category.mediaStoreRelativePath}/%"
@@ -1102,20 +1095,25 @@ private fun clearAllViaMediaStore(context: Context): Int {
             else ->
                 "${rootMediaStorePrefix()}${category.mediaStoreRelativePath}/%"
         }
-        // VIDEO 排除掉 LivePicturesMovies/ 子目录里的文件
-        val (selection, selectionArgs) = if (category == HistoryCategory.VIDEO) {
-            "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? AND " +
-                    "${MediaStore.MediaColumns.RELATIVE_PATH} NOT LIKE ?" to arrayOf(
-                relativePrefix,
-                "${Environment.DIRECTORY_MOVIES}/DouyinDownloader/%/%",
-            )
-        } else {
-            "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?" to arrayOf(relativePrefix)
-        }
         try {
-            total += context.contentResolver.delete(collection, selection, selectionArgs)
+            if (category == HistoryCategory.VIDEO) {
+                total += context.contentResolver.delete(
+                    collection,
+                    "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? AND " +
+                            "${MediaStore.MediaColumns.RELATIVE_PATH} NOT LIKE ?",
+                    arrayOf(
+                        relativePrefix,
+                        "${Environment.DIRECTORY_MOVIES}/DouyinDownloader/${HistoryCategory.LIVE_VIDEO.mediaStoreRelativePath}/%",
+                    ),
+                )
+            } else {
+                total += context.contentResolver.delete(
+                    collection,
+                    "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+                    arrayOf(relativePrefix),
+                )
+            }
         } catch (_: Throwable) {
-            // 单类别失败不影响其他类别
         }
     }
     return total
@@ -1148,20 +1146,26 @@ private fun clearAllViaFileSystem(): Int {
 
 private fun deleteItems(context: Context, items: List<HistoryItem>): Int {
     if (items.isEmpty()) return 0
-    // 历史列表现在统一走 file:// Uri（物理目录扫描），删除时
-    // 同时尝试 MediaStore（Q+ 同步清索引）+ File.delete（兜底清物理文件），
-    // 这样无论系统卷上索引是否同步，都能保证历史与磁盘一致。
-    var n = 0
-    for (item in items) {
-        try {
-            context.contentResolver.delete(item.uri, null, null)
-        } catch (_: Throwable) { /* ignore */ }
-        try {
-            val file = item.uri.path?.let { File(it) }
-            if (file != null && file.exists() && file.delete()) n++
-        } catch (_: Throwable) { /* ignore */ }
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        items.count { item ->
+            try {
+                context.contentResolver.delete(item.uri, null, null) > 0
+            } catch (_: Throwable) {
+                false
+            }
+        }
+    } else {
+        var n = 0
+        for (item in items) {
+            try {
+                val file = item.uri.path?.let { File(it) }
+                if (file != null && file.exists() && file.delete()) n++
+            } catch (_: Throwable) {
+                // ignore
+            }
+        }
+        n
     }
-    return n
 }
 
 private fun openExternal(context: Context, uri: Uri, displayName: String? = null) {

@@ -98,8 +98,6 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
 
     private var cachedProfile: AwemeProfile? = null
 
-    private var isLiveVideoBatch = false
-
     fun updateUrl(url: String) {
         _uiState.update { it.copy(url = url, error = null) }
     }
@@ -264,7 +262,7 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
         val indices = profile.imageMediaTypes().indices
             .filter { it % 2 == 1 && profile.imageMediaTypes()[it] == MediaType.VIDEO }
         if (indices.isEmpty()) return
-        startBatch(total = indices.size, isLiveVideo = true) {
+        startBatch(total = indices.size) {
             indices.forEachIndexed { idx, index ->
                 downloadOne(profile, index, overrideType = MediaType.LIVE_VIDEO)
                 if (idx < indices.lastIndex) {
@@ -315,7 +313,7 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
         val profile = cachedProfile ?: return
         val indices = _uiState.value.selectedImageIndices.toList().sorted()
         if (indices.isEmpty()) return
-        _uiState.update { it.copy(isSelectionMode = false) }
+        // 不主动退出选择模式，也不清空已选索引：保留勾选状态让用户能继续选 / 看进度
         startBatch(total = indices.size) {
             indices.forEachIndexed { idx, index ->
                 downloadOne(profile, index)
@@ -323,7 +321,6 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                     delay(800)
                 }
             }
-            _uiState.update { it.copy(selectedImageIndices = emptySet()) }
         }
     }
 
@@ -346,7 +343,7 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
         val profile = cachedProfile ?: return
         val indices = _uiState.value.selectedLiveIndices.toList().sorted()
         if (indices.isEmpty()) return
-        _uiState.update { it.copy(isSelectionMode = false) }
+        // 不主动退出选择模式，也不清空已选索引：保留勾选状态让用户能继续选 / 看进度
         startBatch(total = indices.size) {
             // UI 索引 i 对应原始索引 i * 2（Live 图的封面是偶数索引）
             val originalIndices = indices.map { it * 2 }
@@ -358,7 +355,6 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                     }
                 }
             }
-            _uiState.update { it.copy(selectedLiveIndices = emptySet()) }
         }
     }
 
@@ -366,8 +362,8 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
         val profile = cachedProfile ?: return
         val indices = _uiState.value.selectedLiveIndices.toList().sorted()
         if (indices.isEmpty()) return
-        _uiState.update { it.copy(isSelectionMode = false) }
-        startBatch(total = indices.size, isLiveVideo = true) {
+        // 不主动退出选择模式，也不清空已选索引：保留勾选状态让用户能继续选 / 看进度
+        startBatch(total = indices.size) {
             // UI 索引 i 对应原始索引 i * 2 + 1（Live 图的视频是奇数索引）
             val originalIndices = indices.map { it * 2 + 1 }
             originalIndices.forEachIndexed { idx, originalIndex ->
@@ -378,7 +374,6 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                     }
                 }
             }
-            _uiState.update { it.copy(selectedLiveIndices = emptySet()) }
         }
     }
 
@@ -412,9 +407,8 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
 
     // ========== 内部：批次元数据管理 ==========
 
-    private fun startBatch(total: Int, isLiveVideo: Boolean = false, work: suspend () -> Unit) {
+    private fun startBatch(total: Int, work: suspend () -> Unit) {
         if (total <= 0) return
-        isLiveVideoBatch = isLiveVideo
         _uiState.update {
             it.copy(
                 batch = BatchSession(
@@ -431,10 +425,13 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
         ForegroundDownloadNotifier.cancel(getApplication())
         ForegroundDownloadNotifier.start(getApplication(), total)
 
+        // 用外部作用域跑"提交任务"循环；批次实际结束由 CompleteListener 统计
+        // 到 successCount + failureCount == total 后回调 finalizeBatch，不再依赖 work() 返回时机。
         viewModelScope.launch {
             try {
                 work()
             } catch (_: Throwable) {
+                // 即使提交阶段异常，也不让程序直接吞掉统计
                 finalizeBatchIfFinished()
             }
         }
@@ -448,22 +445,26 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
         val batch = _uiState.value.batch ?: return
         if (!batch.active) return
         val completed = batch.successCount + batch.failureCount
-        if (completed < batch.total) return
-        finalizeBatch(isLiveVideoBatch)
+        if (completed < batch.total) return  // 还有文件在跑，等下一次回调
+        finalizeBatch()
     }
 
-    private fun finalizeBatch(liveVideo: Boolean) {
+    private fun finalizeBatch() {
         val batch = _uiState.value.batch ?: return
         val success = batch.successCount
         val failure = batch.failureCount
+        // 1) 推一条"下载完成"通知
         ForegroundDownloadNotifier.finish(getApplication(), success, failure)
+        // 2) 仅弹一次 Toast，把"第 N 个文件下载成功/失败"的多次提示合并为一次
         val message = if (failure == 0) {
-            "下载完成：$success 个文件" + if (liveVideo) "\n可前往 Live 合成页进行合成" else ""
+            "下载完成：$success 个文件"
         } else {
             "下载完成：$success 个成功，$failure 个失败"
         }
         Toast.makeText(getApplication(), message, Toast.LENGTH_LONG).show()
+        // 3) 清空批次状态，让弹窗收尾关闭
         _uiState.update { it.copy(batch = null) }
+        // 4) 缓存的 profile 仍保留，UI 上还能继续看预览
     }
 
     private fun advanceFile(percent: Int = 0) {

@@ -1,4 +1,4 @@
-本项目 (VedioDownload) 包含来自以下开源项目的代码与第三方依赖：
+本项目 (VedioDownload) 包含来自以下开源项目的代码：
 
 ================================================================================
 halcyra/DYDownloader (https://github.com/halcyra/DYDownloader)
@@ -7,7 +7,7 @@ License: GNU Affero General Public License v3.0 (AGPL-3.0)
 
 本项目基于 halcyra/DYDownloader 修改而来，已将包名从
 com.hhst.dydownloader 改为 com.xianyu.vediodownload，并进行了
-Kotlin 迁移与逻辑精简。以下列出本项目实际复用 / 修改的文件：
+Kotlin 迁移与逻辑精简。以下列出本项目实际复用/修改的文件：
 
   douyin/
     ABogusGenerator.java         a_bogus 签名生成器：SM3 + RC4 + 自定义 Base64
@@ -29,31 +29,24 @@ Kotlin 迁移与逻辑精简。以下列出本项目实际复用 / 修改的文�
   model/
     Platform.java                平台枚举
 
-  兼容性遗留（不直接调用，仅保留旧入口跳转）：
-    VideoFragment.java
-    ImageFragment.java
-    LiveFragment.java
-    SettingsFragment.java
-
 上述文件的版权归属原作者 halcyra 所有。本项目对其的使用、修改、再分发
 均遵循 AGPL-3.0 协议，完整条款见根目录 LICENSE 文件。
 
 ================================================================================
+
 本项目独立新增 / 重新实现的部分
 (Copyright (c) 2026 VedioDownload contributors)：
-================================================================================
 
   MainActivity.kt                       Compose 单 Activity 入口
-  DouyinLoginActivity.java              抖音 Cookie WebView 登录辅助
+
+  douyin/
+    DouyinLoginActivity.java            抖音 Cookie WebView 登录辅助
 
   util/
     CookieManager.java                  本地 Cookie / 免责声明标记持久化
     DownloaderBridge.java               OkHttp 下载 + MediaStore 写入桥接
     ForegroundDownloadNotifier.java     前台下载通知 + 进度通知
     CacheManager.kt                     本地历史文件扫描与缓存统计
-    LivePhotoMaker.kt                   Live Photo 合成：注入 EXIF 时间戳 + MOV 封装
-    MediaCodecMp4Encoder.kt             MediaCodec 转码工具（合成 Live Photo 备用）
-    FFmpegUtils.kt                      ffmpeg-kit 封装（mp4 → mov 转封装）
 
   ui/
     screens/
@@ -65,10 +58,8 @@ Kotlin 迁移与逻辑精简。以下列出本项目实际复用 / 修改的文�
       SettingsScreen.kt                 设置主页 + 子路由
       DownloadViewModel.kt              解析 / 下载状态机
       DisclaimerDialog.kt               首次启动免责弹窗
-      BatchDownloadConfirmDialog.kt     批量下载须知确认
-      BatchDownloadProgressDialog.kt    批量下载进度
-      LivePhotoComposeScreen.kt         Live Photo 合成 UI 页
-      LivePhotoComposeViewModel.kt      Live Photo 合成状态机
+      BatchDownloadConfirmDialog.kt      批量下载须知确认
+      BatchDownloadProgressDialog.kt     批量下载进度
     designsystem/
       component/
         GlassCard.kt                    玻璃态卡片组件
@@ -90,43 +81,31 @@ Kotlin 迁移与逻辑精简。以下列出本项目实际复用 / 修改的文�
       ImagePreviewActivity.kt           内置图片预览
       LivePhotoPreviewActivity.kt       内置 Live 图预览
 
-  其余 drawable / values / layout / mipmap 等资源文件由本项目原创或重新设计。
+  历史遗留 Java Fragment（已不直接使用，仅保留兼容旧入口）：
+    VideoFragment.java / ImageFragment.java /
+    LiveFragment.java / SettingsFragment.java
+
+  其余 drawable / values / layout 等资源文件由本项目原创或重新设计。
 
 ================================================================================
-第三方依赖许可证摘要（完整版本见各依赖官方仓库）
-================================================================================
 
-运行时依赖（APK 打包内）：
-  OkHttp                              Apache License 2.0
-                                      https://github.com/square/okhttp
-  Jackson Databind                    Apache License 2.0
-                                      https://github.com/FasterXML/jackson-databind
-  Gson                                Apache License 2.0
-                                      https://github.com/google/gson
-  AndroidX AppCompat                  Apache License 2.0
-  AndroidX Activity                   Apache License 2.0
-  AndroidX ConstraintLayout           Apache License 2.0
-  AndroidX Core KTX                   Apache License 2.0
-  AndroidX Annotation                 Apache License 2.0
-  AndroidX Media3 (ExoPlayer)         Apache License 2.0
-                                      https://github.com/androidx/media
-  AndroidX ExifInterface              Apache License 2.0
-  Google Material Components           Apache License 2.0
-                                      https://github.com/material-components/material-components-android
-  Jetpack Compose BOM                 Apache License 2.0
-  ffmpeg-kit-full-gpl                 LGPL / GPL（具体子库各异，详见官方仓库）
-                                      https://github.com/Arthenica/ffmpeg-kit
+第三方依赖许可证摘要（完整版本见各依赖官方仓库）：
 
-测试依赖（仅 test / androidTest 编译期）：
-  JUnit                               Eclipse Public License 1.0
-  AndroidX Test Ext JUnit             Eclipse Public License 1.0
-  Espresso Core                       Apache License 2.0
-
-完整 AGPL-3.0 协议请见：
-  - 中文：https://www.gnu.org/licenses/agpl-3.0.zh-cn.html
-  - 英文：https://www.gnu.org/licenses/agpl-3.0.txt
+  AndroidX AppCompat              Apache License 2.0
+  AndroidX Activity               Apache License 2.0
+  AndroidX ConstraintLayout       Apache License 2.0
+  AndroidX Core KTX               Apache License 2.0
+  AndroidX Annotation             Apache License 2.0
+  AndroidX Media3 (ExoPlayer)     Apache License 2.0
+                                  https://github.com/androidx/media
+  AndroidX ExifInterface           Apache License 2.0
+  Google Material Components       Apache License 2.0
+                                  https://github.com/material-components/material-components-android
+  JUnit                           Eclipse Public License 1.0
+  AndroidX Test Ext JUnit         Eclipse Public License 1.0
+  Espresso Core                   Apache License 2.0
 
 ================================================================================
+
 ⚠️ 仅供个人技术学习使用，禁止商用、禁止用于任何违法违规用途。
 下载的内容版权归原作者所有，请尊重版权。
-================================================================================

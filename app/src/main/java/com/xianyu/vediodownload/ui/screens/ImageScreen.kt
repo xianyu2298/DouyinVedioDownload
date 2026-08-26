@@ -60,6 +60,7 @@ fun ImageScreen(
     val context = LocalContext.current
     val tokens = LocalGlassTokens.current
 
+
     val imageUrls = uiState.preview?.imageUrls?.split("|||")?.filter { it.isNotEmpty() } ?: emptyList()
     val cookieManager = remember { CookieManager(context.applicationContext) }
     var showBatchConfirm by remember { mutableStateOf(false) }
@@ -220,6 +221,7 @@ fun ImageScreen(
 
         uiState.preview?.let { preview ->
             if (uiState.isImage) {
+                val imageCount = imageUrls.size
                 if (uiState.isSelectionMode) {
                     // 选择模式：显示网格
                     ImageSelectionGrid(
@@ -263,6 +265,17 @@ fun ImageScreen(
                     )
 
                     Spacer(modifier = Modifier.height(20.dp))
+
+                    if (imageCount > 1) {
+                        Text(
+                            text = "共 $imageCount 张图",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = tokens.textSecondary,
+                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),

@@ -8,7 +8,7 @@
     <color name="light_gray">#F5F5F5</color>
 
     <!-- Logo 背景色 -->
-    <color name="ic_launcher_background">#FF4D00</color>
+    <color name="ic_launcher_background">#000000</color>
 
     <!-- 主题色 -->
     <color name="primary">#FF2A5E</color>
