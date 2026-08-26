@@ -80,6 +80,8 @@ import com.xianyu.vediodownload.ui.designsystem.component.NeumorphicButton
 import com.xianyu.vediodownload.ui.designsystem.theme.AppSpacing
 import com.xianyu.vediodownload.ui.designsystem.theme.LocalGlassTokens
 import com.xianyu.vediodownload.ui.designsystem.theme.glassConvex
+import com.xianyu.vediodownload.util.CacheManager
+import com.xianyu.vediodownload.util.toReadableSize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -155,13 +157,16 @@ fun HistoryHomeScreen(
             onConfirm = {
                 showClearConfirm = false
                 scope.launch {
-                    val deletedCount = withContext(Dispatchers.IO) {
-                        clearAllDownloads(context)
+                    val freedBytes = withContext(Dispatchers.IO) {
+                        CacheManager.clearAllDownloads(context)
                     }
-                    if (deletedCount > 0) {
+                    if (freedBytes > 0L) {
                         android.widget.Toast.makeText(
                             context,
-                            context.getString(R.string.history_deleted_toast, deletedCount),
+                            context.getString(
+                                R.string.history_deleted_toast,
+                                freedBytes.toReadableSize(),
+                            ),
                             android.widget.Toast.LENGTH_SHORT,
                         ).show()
                     }
@@ -1064,84 +1069,6 @@ private fun scanViaFileSystem(category: HistoryCategory): List<HistoryItem> {
                 category = category,
             )
         }
-}
-
-private fun clearAllDownloads(context: Context): Int {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        return clearAllViaMediaStore(context)
-    }
-    return clearAllViaFileSystem()
-}
-
-private fun clearAllViaMediaStore(context: Context): Int {
-    var total = 0
-    for (category in listOf(
-        HistoryCategory.VIDEO,
-        HistoryCategory.IMAGE,
-        HistoryCategory.LIVE_VIDEO,
-    )) {
-        val collection = when (category) {
-            HistoryCategory.VIDEO, HistoryCategory.LIVE_VIDEO ->
-                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            HistoryCategory.IMAGE ->
-                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            HistoryCategory.LIVE_IMAGE -> continue
-        }
-        val relativePrefix = when (category) {
-            HistoryCategory.LIVE_VIDEO ->
-                "${Environment.DIRECTORY_MOVIES}/DouyinDownloader/${category.mediaStoreRelativePath}/%"
-            HistoryCategory.VIDEO ->
-                "${Environment.DIRECTORY_MOVIES}/DouyinDownloader/%"
-            else ->
-                "${rootMediaStorePrefix()}${category.mediaStoreRelativePath}/%"
-        }
-        try {
-            if (category == HistoryCategory.VIDEO) {
-                total += context.contentResolver.delete(
-                    collection,
-                    "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? AND " +
-                            "${MediaStore.MediaColumns.RELATIVE_PATH} NOT LIKE ?",
-                    arrayOf(
-                        relativePrefix,
-                        "${Environment.DIRECTORY_MOVIES}/DouyinDownloader/${HistoryCategory.LIVE_VIDEO.mediaStoreRelativePath}/%",
-                    ),
-                )
-            } else {
-                total += context.contentResolver.delete(
-                    collection,
-                    "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
-                    arrayOf(relativePrefix),
-                )
-            }
-        } catch (_: Throwable) {
-        }
-    }
-    return total
-}
-
-private fun clearAllViaFileSystem(): Int {
-    var total = 0
-    // 视频类在 Movies/DouyinDownloader/，图片类在 Pictures/DouyinDownloader/Pictures/
-    val moviesRoot = File(
-        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
-        "DouyinDownloader",
-    )
-    val picturesRoot = rootBaseDir()
-    for (root in listOf(moviesRoot, picturesRoot)) {
-        if (!root.exists()) continue
-        for (child in root.listFiles() ?: emptyArray()) {
-            if (!child.isDirectory) continue
-            val files = child.listFiles() ?: continue
-            for (f in files) {
-                try {
-                    if (f.delete()) total++
-                } catch (_: Throwable) {
-                    // ignore
-                }
-            }
-        }
-    }
-    return total
 }
 
 private fun deleteItems(context: Context, items: List<HistoryItem>): Int {

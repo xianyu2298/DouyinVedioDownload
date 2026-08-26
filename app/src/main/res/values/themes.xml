@@ -34,39 +34,4 @@
         <item name="android:windowTranslucentNavigation">true</item>
     </style>
 
-    <!-- 解析按钮 -->
-    <style name="ParseButton" parent="Widget.Material3.Button.TonalButton">
-        <item name="backgroundTint">@color/mist_teal_500</item>
-        <item name="android:textColor">@color/ink_100</item>
-        <item name="cornerRadius">24dp</item>
-        <item name="android:stateListAnimator">@animator/btn_scale_down</item>
-    </style>
-
-    <!-- 解析按钮（次要样式） -->
-    <style name="ParseButton.Secondary" parent="Widget.Material3.Button.TextButton">
-        <item name="android:textColor">@color/mist_teal_500</item>
-        <item name="rippleColor">@color/primary_ripple_secondary</item>
-    </style>
-
-    <!-- 下载按钮 -->
-    <style name="DownloadButton" parent="Widget.Material3.Button">
-        <item name="android:textColor">@color/ink_100</item>
-        <item name="backgroundTint">@color/mist_teal_500</item>
-        <item name="cornerRadius">16dp</item>
-        <item name="android:textSize">14sp</item>
-        <item name="android:paddingTop">10dp</item>
-        <item name="android:paddingBottom">10dp</item>
-        <item name="android:stateListAnimator">@animator/btn_scale_down</item>
-    </style>
-
-    <!-- 输入框样式 -->
-    <style name="UrlEditText" parent="Widget.Material3.TextInputLayout.OutlinedBox">
-        <item name="boxCornerRadiusTopStart">24dp</item>
-        <item name="boxCornerRadiusTopEnd">24dp</item>
-        <item name="boxCornerRadiusBottomStart">24dp</item>
-        <item name="boxCornerRadiusBottomEnd">24dp</item>
-        <item name="boxStrokeColor">@color/primary</item>
-        <item name="hintTextColor">@color/text_hint</item>
-    </style>
-
 </resources>

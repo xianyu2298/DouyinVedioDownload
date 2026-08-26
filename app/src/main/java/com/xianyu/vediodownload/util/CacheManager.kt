@@ -12,12 +12,15 @@ import java.io.File
  * 清空缓存 / 下载相关工具。
  *
  * - "App 缓存" = cacheDir + externalCacheDir（不会动 code/data/files 目录）
- * - "已下载内容"：
- *   - Movies/DouyinDownloader/                视频下载
- *   - Movies/DouyinDownloader/LivePicturesMovies/  Live 动态短片
- *   - Pictures/DouyinDownloader/Pictures/    图片下载 + Live 静态封面
- *   - Android 10+：通过 MediaStore 删除（同步清理 MediaStore 与物理文件）
- *   - Android 9-：直接 File.deleteRecursively
+ * - "已下载内容"占用 = Movies/DouyinDownloader/ + Pictures/DouyinDownloader/
+ *   这两个壳目录下的所有子目录和文件的字节数（壳目录本身保留，不计入）。
+ * - 壳目录下的具体内容：
+ *   - Movies/DouyinDownloader/                        视频下载
+ *   - Movies/DouyinDownloader/LivePicturesMovies/     Live 动态短片
+ *   - Pictures/DouyinDownloader/Pictures/             图片下载 + Live 静态封面
+ * - 清空策略（壳目录本身始终保留）：
+ *   - Android 10+：通过 MediaStore 删除（系统同步清理 MediaStore 与物理文件）
+ *   - Android 9-：逐个 File.delete()
  */
 object CacheManager {
 
@@ -27,6 +30,15 @@ object CacheManager {
         Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
         ALBUM_NAME,
     )
+
+    /** Movies 根目录：/sdcard/Movies/DouyinDownloader/（视频类 + Live 动态短片）。 */
+    fun moviesRootDir(): File = File(
+        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+        ALBUM_NAME,
+    )
+
+    /** 用于"已下载内存占用"统计的两个壳目录（Movies + Pictures），壳目录本身保留。 */
+    private fun downloadRoots(): List<File> = listOf(moviesRootDir(), rootDir())
 
     /** Movies 根目录对应的 MediaStore 前缀（视频类都从这里走）。 */
     private fun moviesMediaStorePrefix(): String =
@@ -44,13 +56,19 @@ object CacheManager {
         total
     }
 
+    /**
+     * 已下载内容占用的总字节数 = Movies/DouyinDownloader/ + Pictures/DouyinDownloader/
+     * 这两个壳目录下的所有子目录和文件的字节数（壳目录本身保留）。
+     */
     suspend fun computeDownloadBytes(): Long = withContext(Dispatchers.IO) {
-        val root = rootDir()
-        if (!root.exists()) return@withContext 0L
         var total = 0L
-        (root.listFiles() ?: emptyArray())
-            .filter { it.isDirectory }
-            .forEach { sub -> total += sub.sumBytes() }
+        for (root in downloadRoots()) {
+            if (!root.exists()) continue
+            // 只遍历壳目录下的"子目录"，不算壳目录本身那一层空壳（虽然空壳 length()=0）
+            (root.listFiles() ?: emptyArray())
+                .filter { it.isDirectory }
+                .forEach { sub -> total += sub.sumBytes() }
+        }
         total
     }
 
@@ -63,8 +81,14 @@ object CacheManager {
     }
 
     /**
-     * 清空所有下载：Movies/、Pictures/、LivePicturesMovies/ 三个子目录（包含 MediaStore 记录）。
-     * 返回被释放的字节数（近似）。
+     * 清空 Movies/DouyinDownloader/ 与 Pictures/DouyinDownloader/ 这两个壳目录下的
+     * 所有下载文件（普通视频 + Live 动态短片 + 图片 + Live 静态封面）。
+     *
+     * 注意：壳目录本身保留，下次下载时 App 会自动重建。
+     * - Android 10+：通过 MediaStore 删除（系统会同步清理物理文件，壳目录不动）
+     * - Android 9-：逐文件 File.delete()（子目录和壳目录都不动）
+     *
+     * 返回被释放的字节数（Movies + Pictures 两边合计）。
      */
     suspend fun clearAllDownloads(context: Context): Long = withContext(Dispatchers.IO) {
         // 必须在 delete 之前统计大小
@@ -78,7 +102,7 @@ object CacheManager {
     }
 
     private fun clearAllDownloadsQ(context: Context) {
-        // 视频类：Movies/（普通视频 + Live 动态短片）都属于 Video.Media
+        // 视频类：Movies/DouyinDownloader/ 下的普通视频 + Live 动态短片
         try {
             context.contentResolver.delete(
                 MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
@@ -90,7 +114,7 @@ object CacheManager {
             )
         } catch (_: Throwable) { /* ignore */ }
 
-        // 图片类：Pictures/（含 Live 静态封面）
+        // 图片类：Pictures/DouyinDownloader/Pictures/ 下的图片 + Live 静态封面
         try {
             context.contentResolver.delete(
                 MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
@@ -101,13 +125,9 @@ object CacheManager {
     }
 
     private fun clearAllDownloadsLegacy() {
-        // 视频在 Movies/DouyinDownloader/，图片在 Pictures/DouyinDownloader/Pictures/
-        val moviesRoot = File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
-            ALBUM_NAME,
-        )
-        val picturesRoot = rootDir()
-        for (root in listOf(moviesRoot, picturesRoot)) {
+        // Movies/DouyinDownloader/ 与 Pictures/DouyinDownloader/ 各自的子目录，
+        // 每个子目录里的文件逐个删；子目录和壳目录都不动。
+        for (root in downloadRoots()) {
             if (!root.exists()) continue
             (root.listFiles() ?: emptyArray())
                 .filter { it.isDirectory }

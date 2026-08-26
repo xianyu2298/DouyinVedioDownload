@@ -246,11 +246,10 @@ fun LiveScreen(
                             modifier = Modifier.weight(1f)
                         )
                         NeumorphicButton(
-                            text = "下载所选视频 (${uiState.selectedLiveIndices.size})",
+                            text = "下载所选短片 (${uiState.selectedLiveIndices.size})",
                             onClick = { viewModel.downloadSelectedLiveVideos() },
                             enabled = uiState.selectedLiveIndices.isNotEmpty(),
                             modifier = Modifier.weight(1f),
-                            isPrimary = false
                         )
                     }
                 } else {
