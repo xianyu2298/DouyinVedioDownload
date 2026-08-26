@@ -40,8 +40,6 @@ import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -73,6 +71,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import com.xianyu.vediodownload.R
 import com.xianyu.vediodownload.ui.designsystem.component.GlassCard
@@ -679,29 +678,46 @@ private fun HistoryConfirmDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val tokens = LocalGlassTokens.current
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(text = title) },
-        text = { Text(text = message) },
+        shape = RoundedCornerShape(28.dp),
+        containerColor = Color(0xF2FFFFFF),
+        tonalElevation = 0.dp,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true,
+        ),
+        title = {
+            Text(
+                text = title,
+                color = tokens.textPrimary,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        },
+        text = {
+            Text(
+                text = message,
+                color = tokens.textSecondary,
+                fontSize = 15.sp,
+                lineHeight = 22.sp,
+            )
+        },
+        // 按钮位置：左侧确认（危险）、右侧取消（普通）。
         confirmButton = {
-            Button(
-                onClick = onConfirm,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFEF4444),
-                    contentColor = Color.White,
-                ),
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                Text(
-                    text = stringResource(R.string.history_action_confirm),
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
+            NeumorphicButton(
+                text = stringResource(R.string.history_action_cancel),
+                onClick = onDismiss,
+                isPrimary = true,
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(text = stringResource(R.string.history_action_cancel))
-            }
+            NeumorphicButton(
+                text = stringResource(R.string.history_action_confirm),
+                onClick = onConfirm,
+                isDanger = true,
+            )
         },
     )
 }

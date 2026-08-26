@@ -597,7 +597,8 @@ private fun ClearCacheDialog(
                 }
             }
         },
-        confirmButton = {
+        // 按钮位置：左侧确认（危险）、右侧取消（普通），与其它新风格弹窗保持一致。
+        dismissButton = {
             NeumorphicButton(
                 text = stringResource(R.string.cache_confirm),
                 onClick = onConfirm,
@@ -607,7 +608,7 @@ private fun ClearCacheDialog(
                 cornerRadius = 22.dp,
             )
         },
-        dismissButton = {
+        confirmButton = {
             NeumorphicButton(
                 text = stringResource(R.string.cache_cancel),
                 onClick = onDismiss,
