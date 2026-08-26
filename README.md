@@ -1,7 +1,7 @@
-# 抖净-DouyinDownload（抖音无水印下载 Android App）
+# 抖净-DouyinDownload（抖音无水印下载、Live实况照片合成 Android App）
 
-抖音无水印视频 / 图片 / Live 实况图下载 Android 原生应用（Java 后端 + Jetpack Compose 前端）
-本项目参考了 [halcyra/DYDownloader](https://github.com/halcyra/DYDownloader) 的算法而来，借助大佬的力量进行开发
+抖音无水印视频 / 图片 / Live 实况图下载、合成 Android 原生应用（Java 后端 + Jetpack Compose 前端）
+本项目参考了 [halcyra/DYDownloader](https://github.com/halcyra/DYDownloader) 的解析算法而来，借助大佬的力量进行开发
 
 **⚠️ 仅供个人技术学习使用，禁止商用、禁止违法行为 ⚠️**
 
