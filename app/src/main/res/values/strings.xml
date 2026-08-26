@@ -127,6 +127,11 @@
     <string name="history_live_subtype">Live 动态短片</string>
     <string name="xuzhi">确定</string>
 
+    <!-- Live 图合成 -->
+    <string name="settings_section_live_compose">Live 图合成</string>
+    <string name="settings_live_compose_desc">将本地视频和图片合成为 iPhone/Android 可识别的 Live Photo 格式</string>
+    <string name="btn_open_live_compose">打开 Live 图合成</string>
+
     <!-- 下载进度弹窗 / 通知 -->
     <string name="batch_progress_title">下载中…</string>
     <string name="batch_progress_file_label">正在下载第 %1$d / %2$d 个</string>

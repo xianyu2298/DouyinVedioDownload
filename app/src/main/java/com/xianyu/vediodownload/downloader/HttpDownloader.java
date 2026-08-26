@@ -198,8 +198,19 @@ public class HttpDownloader {
     }
   }
 
-  public enum ExpectedContent {
-    IMAGE {
+    public enum ExpectedContent {
+        AUTO {
+            @Override
+            boolean isCompatibleContentType(String contentType) {
+                return true;
+            }
+
+            @Override
+            boolean matchesSignature(File file) throws IOException {
+                return true;
+            }
+        },
+        IMAGE {
       @Override
       boolean isCompatibleContentType(String contentType) {
         return isBinaryType(contentType, "image/");

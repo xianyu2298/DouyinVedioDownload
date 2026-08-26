@@ -19,7 +19,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -232,15 +231,6 @@ fun LiveScreen(
                         imageUrls = imageUrls,
                         selectedIndices = uiState.selectedLiveIndices,
                         onToggle = { viewModel.toggleLiveSelection(it) },
-                        onPreview = { index ->
-                            val intent = Intent(context, LivePhotoPreviewActivity::class.java).apply {
-                                putExtra("image_urls", preview.imageUrls)
-                                putExtra("video_urls", preview.liveVideoUrls)
-                                putExtra("cover_urls", preview.liveCoverUrls)
-                                putExtra("current_index", index)
-                            }
-                            context.startActivity(intent)
-                        }
                     )
 
                     Spacer(modifier = Modifier.height(20.dp))
@@ -346,8 +336,7 @@ fun LiveScreen(
 private fun LiveSelectionGrid(
     imageUrls: List<String>,
     selectedIndices: Set<Int>,
-    onToggle: (Int) -> Unit,
-    onPreview: (Int) -> Unit
+    onToggle: (Int) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         imageUrls.forEachIndexed { index, url ->
@@ -370,22 +359,6 @@ private fun LiveSelectionGrid(
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
                 )
-
-                // 播放预览图标
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.25f))
-                        .clickable { onPreview(index) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Default.PlayArrow,
-                        contentDescription = "预览",
-                        tint = Color.White,
-                        modifier = Modifier.size(36.dp)
-                    )
-                }
 
                 // 选中标记
                 Box(

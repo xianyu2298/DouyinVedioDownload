@@ -34,7 +34,12 @@ Android 原生应用，纯 API 方案解析抖音作品，下载无水印视频�
 5. DownloaderBridge（OkHttp）下载到 MediaStore：
    - 视频 → Movies/DouyinDownloader/
    - 图片 → Pictures/DouyinDownloader/
+   - Live 实况图 → Movies/DouyinDownloader/LivePicturesMovies/（.mp4 + .jpg 同名成对）
    - 批量下载时通过前台服务 + 进度通知展示
+6. 实况图 (Live Photo) 在下载完成后可一键"合成"为 Apple Live Photo：
+   - 读取静态图 EXIF 中的拍摄时间作为 contentTime
+   - 通过 ffmpeg-kit-full-gpl 把动态短片转码为 MOV（Live Photo 容器要求）
+   - 用 MediaCodec 将关键帧作为静态图，重新封装到 MOV（同组 baseName）
 ```
 
 ### 涉及到的核心代码（精简）
@@ -50,6 +55,13 @@ List<String> urls = profile.downloadUrls();
 // 3. 单条 / 批量下载到 MediaStore
 downloaderBridge.download(profile, index, cookie, overrideType,
     progressListener, completeListener);
+
+// 4. 一键合成 Live Photo（Kotlin）
+livePhotoMaker.makeLivePhoto(
+    context = context,
+    videoPath = "/sdcard/Movies/DouyinDownloader/LivePicturesMovies/xxx.mp4",
+    imagePath = "/sdcard/Movies/DouyinDownloader/LivePicturesMovies/xxx.jpg",
+)
 ```
 
 ### a_bogus 签名
@@ -62,12 +74,13 @@ downloaderBridge.download(profile, index, cookie, overrideType,
 |------|------|
 | 视频下载 | 单视频解析下载，最高码率无水印直链 |
 | 图片作品下载 | 一次性下载原图集合，保存到 `Pictures/DouyinDownloader/` |
-| Live 实况图下载 | 静态封面 + 动态短片分别下载 |
+| Live 实况图下载 | 静态封面 + 动态短片分别下载到 `Movies/DouyinDownloader/LivePicturesMovies/` |
+| 一键合成 Live Photo | 已下载的实况图素材可选"合成"，生成可在 iPhone / 部分 Android 相册中播放的 Live Photo MOV |
 | 批量下载 | 图片集 / Live 集触发"须知"确认弹窗后并发下载，进度前台通知 |
-| 下载历史记录 | 设置页可查看本地已下载的 视频 / 图片 / Live 三类文件 |
-| 新拟态 / 玻璃态 UI | 全面 Compose 实现，深色 / 浅色双套设计 token |
+| 下载历史记录 | 设置页可查看本地已下载的 视频 / 图片 / Live 三类文件；支持长按多选 / 全选 / 批量删除 |
+| 新拟态 UI | 全面 Compose 实现，深色 / 浅色双套设计 token |
 
-## 🆚 方案演进（背景信息，仅供参考）
+## 🆚 方案演进
 
 | 版本 | 方案 | 状态 |
 |------|------|------|
@@ -80,6 +93,7 @@ downloaderBridge.download(profile, index, cookie, overrideType,
 - **Cookie 必填**：抖音现已对三个端点全部加入风控，必须在设置页填入登录态 Cookie（含 `ttwid` / `sessionid` 等关键字段）才能正常解析。未设 Cookie 时 `iteminfo/` 也无法返回有效 JSON，会直接报错
 - **限流风险**：抖音对单 IP 频繁请求会触发风控，短时间批量下载可能不全
 - **尊重版权**：下载内容请仅供个人学习欣赏
+- **Live Photo 合成**：需要 ffmpeg-kit-full-gpl.aar 离线打包到 APK 内，体积较大
 
 ## 🛠 编译环境要求
 
@@ -95,7 +109,8 @@ downloaderBridge.download(profile, index, cookie, overrideType,
 2. 在对应页面（视频 / 图片 / Live）粘贴到输入框
 3. **进入设置页 → 填入抖音 Web 端登录 Cookie**（必填，否则解析会失败）
 4. 点击"解析"，等待 2-5 秒
-5. 点击"下载"（图片 / Live 集合会自动弹"须知"确认）→ 文件保存到 `Movies/DouyinDownloader/` 或 `Pictures/DouyinDownloader/`
+5. 点击"下载"，文件保存到 `Movies/DouyinDownloader/` 、 `Pictures/DouyinDownloader/`、`Movies/DouyinDownloader/LivePhotos`
+6. 进入"历史记录 → Live"，对已下载的实况图点"合成"即可生成标准 Live Photo（.mov）
 
 ## 📦 主要依赖
 
@@ -106,25 +121,41 @@ downloaderBridge.download(profile, index, cookie, overrideType,
 | Gson | 2.10.1 | 备用 JSON 解析 |
 | Compose BOM | 2023.10.01 | UI 框架 |
 | ExifInterface | androidx.exifinterface | Live 图 EXIF 元数据读取 |
+| ffmpeg-kit |  | Live Photo 合成：转封装为 MOV（GPL-3.0） |
+| Media3 (ExoPlayer) | 1.x | 内置视频 / Live 预览播放器 |
 
 ## 📁 项目结构
 
 ```
 app/src/main/java/com/xianyu/vediodownload/
-├── douyin/                    # 抖音协议层（Java）
+├── douyin/                    # 抖音协议层（Java，复用自 halcyra/DYDownloader）
 │   ├── DouyinDownloader.java  # 解析主入口、三个端点 fallback、URL 候选拼接
+│   ├── ABogusGenerator.java   # a_bogus 签名（SM3 + RC4 + 自定义 Base64）
 │   ├── AwemeProfile.java      # 解析结果数据类
-│   └── ...                    # ABogus 签名 / Cookie 管理
+│   └── exception/             # 异常类型
+├── downloader/                # HTTP 下载器（Java）
+│   ├── HttpDownloader.java
+│   └── PlatformRequestContext.java
+├── model/                     # 平台枚举
 ├── ui/
 │   ├── screens/               # Compose 页面（视频 / 图片 / Live / 历史 / 设置 / 主页）
+│   │                          #   含 LivePhotoComposeScreen 实况图合成 UI
 │   ├── designsystem/          # 设计系统：新拟态 / 玻璃态 token & 组件
-│   └── player/                # 内置预览播放器
+│   └── player/                # 内置预览播放器（视频 / 图片 / Live）
 ├── util/
 │   ├── DownloaderBridge.java  # OkHttp 下载 + MediaStore 写入
+│   ├── CookieManager.java     # 本地 Cookie / 免责声明标记持久化
+│   ├── ForegroundDownloadNotifier.java  # 前台下载通知 + 进度通知
 │   ├── CacheManager.kt        # 本地历史文件扫描
-│   └── ...
+│   ├── LivePhotoMaker.kt      # Live Photo 合成（EXIF 时间戳注入 + MOV 封装）
+│   ├── MediaCodecMp4Encoder.kt# MediaCodec 转码工具（合成 Live Photo 时备用）
+│   └── FFmpegUtils.kt         # ffmpeg-kit 封装（MOV 转封装）
 ├── MainActivity.kt            # Compose 单 Activity 入口
-└── ...
+├── VideoFragment.java         # 历史遗留 Fragment（保留兼容旧入口）
+├── ImageFragment.java
+├── LiveFragment.java
+├── SettingsFragment.java
+└── DouyinLoginActivity.java   # 抖音 Cookie WebView 登录辅助
 ```
 
 ## 📄 免责声明
@@ -144,5 +175,5 @@ app/src/main/java/com/xianyu/vediodownload/
 
 基于 halcyra/DYDownloader 修改
 
-用户使用本软件产生的一切行为，全部由使用者本人承担全部法律责任。
-因违规使用本软件造成的版权侵权、民事赔偿、行政处罚等一切后果，项目开发者不承担任何连带责任。
+**用户使用本软件产生的一切行为，全部由使用者本人承担全部法律责任。**
+**因违规使用本软件造成的版权侵权、民事赔偿、行政处罚等一切后果，项目开发者不承担任何连带责任。**

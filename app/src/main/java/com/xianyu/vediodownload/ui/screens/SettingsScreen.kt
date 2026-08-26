@@ -40,8 +40,9 @@ import kotlinx.coroutines.withContext
  *  - null → 设置主页（账号设置、下载历史、免责声明…）
  *  - SubPage.HISTORY_HOME → 历史记录主页（4 个选项 + 清空全部）
  *  - SubPage.HISTORY_VIDEO / IMAGE / LIVE → 对应分类列表
+ *  - SubPage.LIVE_COMPOSE → Live 图合成页面
  */
-private enum class SubPage { HISTORY_HOME, HISTORY_VIDEO, HISTORY_IMAGE, HISTORY_LIVE }
+private enum class SubPage { HISTORY_HOME, HISTORY_VIDEO, HISTORY_IMAGE, HISTORY_LIVE, LIVE_COMPOSE }
 
 @Composable
 fun SettingsScreen(
@@ -66,6 +67,7 @@ fun SettingsScreen(
             null -> null
             SubPage.HISTORY_HOME -> null
             SubPage.HISTORY_VIDEO, SubPage.HISTORY_IMAGE, SubPage.HISTORY_LIVE -> SubPage.HISTORY_HOME
+            SubPage.LIVE_COMPOSE -> null
         }
     }
 
@@ -93,6 +95,7 @@ fun SettingsScreen(
             null -> SettingsHomeContent(
                 onNavigateToLogin = onNavigateToLogin,
                 onOpenHistoryHome = { subPage = SubPage.HISTORY_HOME },
+                onOpenLiveCompose = { subPage = SubPage.LIVE_COMPOSE },
             )
             SubPage.HISTORY_HOME -> HistoryHomeScreen(
                 onBack = { subPage = null },
@@ -119,6 +122,9 @@ fun SettingsScreen(
             SubPage.HISTORY_LIVE -> HistoryLivePhotoListScreen(
                 onBack = { subPage = SubPage.HISTORY_HOME },
             )
+            SubPage.LIVE_COMPOSE -> LivePhotoComposeScreenContent(
+                onBack = { subPage = null },
+            )
         }
     }
 }
@@ -127,6 +133,7 @@ fun SettingsScreen(
 private fun SettingsHomeContent(
     onNavigateToLogin: () -> Unit,
     onOpenHistoryHome: () -> Unit,
+    onOpenLiveCompose: () -> Unit,
 ) {
     val scrollState = rememberScrollState()
     val context = LocalContext.current
@@ -229,6 +236,32 @@ private fun SettingsHomeContent(
             NeumorphicButton(
                 text = stringResource(R.string.btn_download_history),
                 onClick = onOpenHistoryHome,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Live 图合成卡片
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = stringResource(R.string.settings_section_live_compose),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = tokens.textPrimary
+            )
+            Text(
+                text = stringResource(R.string.settings_live_compose_desc),
+                fontSize = 12.sp,
+                color = tokens.textSecondary,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            NeumorphicButton(
+                text = stringResource(R.string.btn_open_live_compose),
+                onClick = onOpenLiveCompose,
                 modifier = Modifier.fillMaxWidth()
             )
         }

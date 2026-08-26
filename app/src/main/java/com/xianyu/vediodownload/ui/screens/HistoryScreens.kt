@@ -346,7 +346,9 @@ fun HistoryListScreen(
         }
     }
 
-    val allSelected by derivedStateOf { items.isNotEmpty() && selected.size == items.size }
+    val allSelected by derivedStateOf {
+        items.isNotEmpty() && items.all { it.id in selected }
+    }
     var pendingDelete by remember { mutableStateOf(false) }
 
     if (pendingDelete) {
@@ -390,7 +392,11 @@ fun HistoryListScreen(
                 allSelected = allSelected,
                 selectedCount = selected.size,
                 onToggleSelectAll = {
-                    if (allSelected) selected.clear() else selected.addAll(items.map { it.id })
+                    if (allSelected) selected.clear()
+                    else {
+                        selected.clear()
+                        selected.addAll(items.map { it.id }.distinct())
+                    }
                 },
                 onDelete = { pendingDelete = true },
                 onExit = {
@@ -483,7 +489,9 @@ fun HistoryLivePhotoListScreen(
         }
     }
 
-    val allSelected by derivedStateOf { pairs.isNotEmpty() && selected.size == pairs.size }
+    val allSelected by derivedStateOf {
+        pairs.isNotEmpty() && pairs.all { it.baseName in selected }
+    }
     var pendingDelete by remember { mutableStateOf(false) }
 
     if (pendingDelete) {
@@ -533,7 +541,10 @@ fun HistoryLivePhotoListScreen(
                 selectedCount = selected.size,
                 onToggleSelectAll = {
                     if (allSelected) selected.clear()
-                    else selected.addAll(pairs.map { it.baseName })
+                    else {
+                        selected.clear()
+                        selected.addAll(pairs.map { it.baseName }.distinct())
+                    }
                 },
                 onDelete = { pendingDelete = true },
                 onExit = {
@@ -924,41 +935,32 @@ private fun rootMediaStorePrefix(): String =
 
 /** 按类别扫对应子目录。 */
 private fun scanCategory(context: Context, category: HistoryCategory): List<HistoryItem> {
-    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        scanViaMediaStore(context, category)
-    } else {
-        scanViaFileSystem(category)
-    }
+    // 统一走文件系统扫描，避免 MediaStore 在不同 Android 版本 / OEM 上
+    // 因为 RELATIVE_PATH 规范化、IS_PENDING、卷选择等原因导致历史记录条数
+    // 与文件管理器看到的物理文件数对不上。
+    return scanViaFileSystem(category)
 }
 
 /**
- * Live 下载记录：只扫 Movies/DouyinDownloader/LivePicturesMovies/ 下的动态短片。
- * 封面（如果有下载且同名）作为可选项填充，不强制配对。
+ * Live 下载记录：扫 Movies/DouyinDownloader/LivePicturesMovies/ 下的文件，
+ * 按文件名（去扩展名）配对，同名视频+封面作为一组展示。
  */
 private fun scanLivePhotoPairs(context: Context): List<LivePhotoPair> {
-    val videos = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        scanViaMediaStore(context, HistoryCategory.LIVE_VIDEO)
-    } else {
-        scanViaFileSystem(HistoryCategory.LIVE_VIDEO)
-    }
-    val videoItems = videos
-        .filter { extOf(it.displayName) in VIDEO_EXTS }
+    val videos = scanViaFileSystem(HistoryCategory.LIVE_VIDEO)
         .sortedByDescending { it.dateAddedMillis }
 
-    val imagesByBase = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        scanViaMediaStore(context, HistoryCategory.LIVE_IMAGE)
-    } else {
-        scanViaFileSystem(HistoryCategory.LIVE_IMAGE)
-    }.filter { extOf(it.displayName) in IMAGE_EXTS }
+    val imagesByBase = scanViaFileSystem(HistoryCategory.LIVE_IMAGE)
         .associateBy { stripExt(it.displayName) }
 
-    return videoItems.map { video ->
-        LivePhotoPair(
-            baseName = stripExt(video.displayName),
-            image = imagesByBase[stripExt(video.displayName)],
-            video = video,
-        )
-    }
+    return videos
+        .groupBy { stripExt(it.displayName) }
+        .map { (baseName, sameBase) ->
+            LivePhotoPair(
+                baseName = baseName,
+                image = imagesByBase[baseName],
+                video = sameBase.first(),
+            )
+        }
 }
 
 private fun extOf(name: String): String =
@@ -1039,25 +1041,23 @@ private fun scanViaMediaStore(context: Context, category: HistoryCategory): List
 }
 
 private fun scanViaFileSystem(category: HistoryCategory): List<HistoryItem> {
-    // 视频类在 Movies/DouyinDownloader/ 下，图片类在 Pictures/DouyinDownloader/ 下
-    val dir: File = if (category == HistoryCategory.VIDEO) {
-        File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
-            "DouyinDownloader",
-        )
-    } else if (category == HistoryCategory.LIVE_VIDEO) {
-        File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
-            "DouyinDownloader/LivePicturesMovies",
-        )
-    } else {
-        File(rootBaseDir(), category.fileSystemChild)
+    val dir: File = when (category) {
+        HistoryCategory.VIDEO ->
+            File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                "DouyinDownloader",
+            )
+        HistoryCategory.LIVE_VIDEO ->
+            File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                "DouyinDownloader/LivePicturesMovies",
+            )
+        else ->
+            File(rootBaseDir(), category.fileSystemChild)
     }
     if (!dir.exists()) return emptyList()
     val files = dir.listFiles() ?: return emptyList()
-    val isVideo = category == HistoryCategory.VIDEO || category == HistoryCategory.LIVE_VIDEO
     return files
-        .filter { f -> if (isVideo) f.isVideoFile() else f.isImageFile() }
         .sortedByDescending { it.lastModified() }
         .mapIndexed { index, file ->
             HistoryItem(
@@ -1148,26 +1148,20 @@ private fun clearAllViaFileSystem(): Int {
 
 private fun deleteItems(context: Context, items: List<HistoryItem>): Int {
     if (items.isEmpty()) return 0
-    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        items.count { item ->
-            try {
-                context.contentResolver.delete(item.uri, null, null) > 0
-            } catch (_: Throwable) {
-                false
-            }
-        }
-    } else {
-        var n = 0
-        for (item in items) {
-            try {
-                val file = item.uri.path?.let { File(it) }
-                if (file != null && file.exists() && file.delete()) n++
-            } catch (_: Throwable) {
-                // ignore
-            }
-        }
-        n
+    // 历史列表现在统一走 file:// Uri（物理目录扫描），删除时
+    // 同时尝试 MediaStore（Q+ 同步清索引）+ File.delete（兜底清物理文件），
+    // 这样无论系统卷上索引是否同步，都能保证历史与磁盘一致。
+    var n = 0
+    for (item in items) {
+        try {
+            context.contentResolver.delete(item.uri, null, null)
+        } catch (_: Throwable) { /* ignore */ }
+        try {
+            val file = item.uri.path?.let { File(it) }
+            if (file != null && file.exists() && file.delete()) n++
+        } catch (_: Throwable) { /* ignore */ }
     }
+    return n
 }
 
 private fun openExternal(context: Context, uri: Uri, displayName: String? = null) {

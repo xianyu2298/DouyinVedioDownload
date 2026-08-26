@@ -1,0 +1,7 @@
+Manifest-Version: 1.0
+Built-By: taner
+Build-Timestamp: 2022-05-30 22:36:00.859+0100
+Created-By: Gradle 6.9
+Build-Jdk: 11.0.13
+Implementation-Version: 0.2.1
+

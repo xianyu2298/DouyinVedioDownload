@@ -45,3 +45,18 @@ GNU AFFERO GENERAL PUBLIC LICENSE
 3. 下载的内容仅供个人学习研究，请尊重版权
 4. 用户对使用本项目产生的所有后果承担全部责任，与原作者 halcyra 及
    VedioDownload 贡献者无关
+
+================================================================================
+关于 ffmpeg-kit-full-gpl.aar
+
+本项目 APK 内打包了 ffmpeg-kit-full-gpl.aar 用于 Live Photo 合成时的
+MP4 → MOV 转封装。该 AAR 内含 GPL / LGPL 协议下的 FFmpeg 二进制。
+对应许可证条款请见：
+
+  - ffmpeg-kit: https://github.com/Arthenica/ffmpeg-kit
+  - FFmpeg:     https://www.ffmpeg.org/legal.html
+  - 各子库 license 文本: app/libs/ffmpeg-kit-extracted/res/raw/license*.txt
+
+如需对本 APK 进行再分发，请同时附上 ffmpeg-kit-full-gpl.aar 的源代码获取方式
+（一般通过上述仓库链接即可获取全部源代码）。
+================================================================================
