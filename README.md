@@ -7,12 +7,16 @@
 
 ## 🎯 项目说明
 
-Android 原生应用，纯 API 方案解析抖音作品，下载无水印视频到本地相册。
+纯 API 方案解析，抖音作品/图片/实况下载（以及合成）无水印到本地。
 **没有 WebView、没有 JS 注入、没有网络拦截**——所有解析逻辑都在 `DouyinDownloader.java`（Java）和 Compose UI 层（Kotlin）里完成。
 
 ## 📱软件截图
 
 ![截图](readme图片/截图.jpg)
+
+
+
+![作者主页下载](E:\VedioDownload\readme图片\作者主页下载.jpg)
 
 ## 🔧 技术原理
 
@@ -61,8 +65,10 @@ downloaderBridge.download(profile, index, cookie, overrideType,
 | 功能 | 说明 |
 |------|------|
 | 视频下载 | 单视频解析下载，最高码率无水印直链 |
-| 图片作品下载 | 一次性下载原图集合，保存到 `Pictures/DouyinDownloader/` |
+| 图片作品下载 | 一次性下载原图集合 |
+| 作者主页下载 | 解析发布者的主页作品，随后可以选择发布者的作品进行下载 |
 | Live 实况图下载 | 静态封面 + 动态短片分别下载 |
+| Live 实况图合成 | 选择H.264编码的视频+.jpg格式的图片可合成Live图 |
 | 批量下载 | 图片集 / Live 集触发"须知"确认弹窗后并发下载，进度前台通知 |
 | 下载历史记录 | 设置页可查看本地已下载的 视频 / 图片 / Live 三类文件 |
 | 新拟态 / 玻璃态 UI | 全面 Compose 实现，深色 / 浅色双套设计 token |
