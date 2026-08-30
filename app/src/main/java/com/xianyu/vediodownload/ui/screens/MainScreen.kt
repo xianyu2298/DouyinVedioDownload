@@ -61,8 +61,15 @@ val tabItems = listOf(
     TabItem("video", "视频", "📹"),
     TabItem("image", "图片", "🖼️"),
     TabItem("live", "Live", "📸"),
+    TabItem("author", "作者", "👤"),
     TabItem("settings", "设置", "⚙️")
 )
+
+/**
+ * 底部玻璃 TabBar 实际占用高度（含上下 margin + imePadding 缓冲）。
+ * 子页面的悬浮按钮 / 底部留白必须参考这个值，避免与 tabbar 重叠。
+ */
+val TabBarReservedBottomHeight = 110.dp
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -103,6 +110,10 @@ fun MainScreen(
         key = "live_view_model",
         factory = DownloadViewModelFactory(application)
     )
+    val authorViewModel: AuthorViewModel = viewModel(
+        key = "author_view_model",
+        factory = AuthorViewModelFactory(application)
+    )
 
     val pagerState = rememberPagerState(initialPage = 0) { tabItems.size }
     val selectedTab = pagerState.currentPage
@@ -111,10 +122,12 @@ fun MainScreen(
     val isPagerScrollEnabled = remember(
         selectedTab,
         imageViewModel.uiState.value.isSelectionMode,
-        liveViewModel.uiState.value.isSelectionMode
+        liveViewModel.uiState.value.isSelectionMode,
+        authorViewModel.uiState.value.isSelectionMode,
     ) {
         !(selectedTab == 1 && imageViewModel.uiState.value.isSelectionMode) &&
-        !(selectedTab == 2 && liveViewModel.uiState.value.isSelectionMode)
+        !(selectedTab == 2 && liveViewModel.uiState.value.isSelectionMode) &&
+        !(selectedTab == 3 && authorViewModel.uiState.value.isSelectionMode)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -134,6 +147,7 @@ fun MainScreen(
                     0 -> "video"
                     1 -> "image"
                     2 -> "live"
+                    3 -> "author"
                     else -> "settings"
                 }
             }
@@ -142,7 +156,8 @@ fun MainScreen(
                 0 -> VideoScreen(viewModel = videoViewModel)
                 1 -> ImageScreen(viewModel = imageViewModel)
                 2 -> LiveScreen(viewModel = liveViewModel)
-                3 -> SettingsScreen(onNavigateToLogin = onNavigateToLogin)
+                3 -> AuthorScreen(viewModel = authorViewModel)
+                4 -> SettingsScreen(onNavigateToLogin = onNavigateToLogin)
             }
         }
 

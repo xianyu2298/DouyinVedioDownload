@@ -34,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -91,10 +92,13 @@ import java.util.Locale
 /**
  * 历史记录页：直接扫描本地下载目录，渲染列表，支持长按/全选删除。
  *
- * 物理目录结构（统一根目录为 Pictures/DouyinDownloader/）：
- *   - Movies/                 视频下载保存处
- *   - Pictures/               图片下载 / Live静态封面保存处
- *   - LivePicturesMovies/     Live动态短片保存处
+ * 物理目录结构：
+ *   - Movies/                              视频下载保存处
+ *   - Pictures/                            图片下载 / Live静态封面保存处
+ *   - Movies/DouyinDownloader/             （壳目录，壳下才是真正的下载文件）
+ *   - Movies/DouyinDownloader/LivePicturesMovies/   Live动态短片保存处
+ *   - Pictures/DouyinDownloader/Pictures/          图片下载 + Live静态封面
+ *   - Pictures/LivePhotos/                 合成出来的 Live 图（不在 DouyinDownloader/ 壳下）
  *
  * - Android 10+ (Q)：通过 MediaStore 按 RELATIVE_PATH LIKE 查询 + 删除（ContentResolver.delete 会同时清理 MediaStore 与物理文件）。
  * - Android 9-：直接走 Environment.getExternalStoragePublicDirectory(Pictures)/DouyinDownloader/ 下的子目录。
@@ -103,6 +107,7 @@ import java.util.Locale
  *   - 视频下载记录  → Movies/
  *   - 图片下载记录  → Pictures/
  *   - Live 下载记录 → Pictures/(静态封面) + LivePicturesMovies/(动态短片)，按文件名（去后缀）配对
+ *   - 合成 Live 图  → Pictures/LivePhotos/，扁平列表
  */
 
 enum class HistoryCategory(
@@ -114,6 +119,11 @@ enum class HistoryCategory(
     IMAGE("Pictures", "Pictures", "Pictures"),
     LIVE_IMAGE("Pictures", "Pictures", "Pictures"),
     LIVE_VIDEO("LivePicturesMovies", "LivePicturesMovies", "LivePicturesMovies"),
+    /**
+     * 合成出来的 Live Photo 文件：Pictures/LivePhotos/ 下的 MP.JPG。
+     * 注意：这个目录不在 DouyinDownloader/ 壳下，扫描时单独走分支。
+     */
+    LIVE_COMPOSED_PHOTO("LivePhotos", "LivePhotos", "LivePhotos"),
 }
 
 data class HistoryItem(
@@ -144,6 +154,7 @@ fun HistoryHomeScreen(
     onBack: () -> Unit,
     onOpenCategory: (HistoryCategory) -> Unit,
     onOpenLivePhotos: () -> Unit,
+    onOpenLiveComposed: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -207,6 +218,14 @@ fun HistoryHomeScreen(
             icon = Icons.Filled.PhotoCamera,
             title = stringResource(R.string.history_option_live),
             onClick = onOpenLivePhotos,
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        HistoryOptionRow(
+            icon = Icons.Filled.AutoAwesome,
+            title = stringResource(R.string.history_option_live_composed),
+            onClick = onOpenLiveComposed,
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -997,7 +1016,7 @@ private fun scanViaMediaStore(context: Context, category: HistoryCategory): List
     val collection = when (category) {
         HistoryCategory.VIDEO, HistoryCategory.LIVE_VIDEO ->
             MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        HistoryCategory.IMAGE, HistoryCategory.LIVE_IMAGE ->
+        HistoryCategory.IMAGE, HistoryCategory.LIVE_IMAGE, HistoryCategory.LIVE_COMPOSED_PHOTO ->
             MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
     }
 
@@ -1014,6 +1033,10 @@ private fun scanViaMediaStore(context: Context, category: HistoryCategory): List
             "${Environment.DIRECTORY_MOVIES}/DouyinDownloader/%"
         HistoryCategory.LIVE_VIDEO ->
             "${Environment.DIRECTORY_MOVIES}/DouyinDownloader/${category.mediaStoreRelativePath}/%"
+        // 合成 Live 图直接落在 Pictures/LivePhotos/ 下，不在 DouyinDownloader/ 壳目录内，
+        // 单独走分支，避免被 Pictures/DouyinDownloader/% 兜底逻辑误匹配到。
+        HistoryCategory.LIVE_COMPOSED_PHOTO ->
+            "${Environment.DIRECTORY_PICTURES}/${category.mediaStoreRelativePath}/%"
         else ->
             "${rootMediaStorePrefix()}${category.mediaStoreRelativePath}/%"
     }
@@ -1057,18 +1080,21 @@ private fun scanViaMediaStore(context: Context, category: HistoryCategory): List
 
 private fun scanViaFileSystem(category: HistoryCategory): List<HistoryItem> {
     // 视频类在 Movies/DouyinDownloader/ 下，图片类在 Pictures/DouyinDownloader/ 下
-    val dir: File = if (category == HistoryCategory.VIDEO) {
-        File(
+    // 合成 Live 图直接落在 Pictures/LivePhotos/ 下，不在 DouyinDownloader/ 壳目录内
+    val dir: File = when (category) {
+        HistoryCategory.VIDEO -> File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
             "DouyinDownloader",
         )
-    } else if (category == HistoryCategory.LIVE_VIDEO) {
-        File(
+        HistoryCategory.LIVE_VIDEO -> File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
             "DouyinDownloader/LivePicturesMovies",
         )
-    } else {
-        File(rootBaseDir(), category.fileSystemChild)
+        HistoryCategory.LIVE_COMPOSED_PHOTO -> File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+            "LivePhotos",
+        )
+        else -> File(rootBaseDir(), category.fileSystemChild)
     }
     if (!dir.exists()) return emptyList()
     val files = dir.listFiles() ?: return emptyList()

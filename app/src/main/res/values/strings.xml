@@ -7,6 +7,7 @@
     <string name="tab_video">视频下载</string>
     <string name="tab_image">图片下载</string>
     <string name="tab_live">Live实况下载</string>
+    <string name="tab_author">作者下载</string>
     <string name="tab_settings">设置</string>
 
     <!-- 主界面文字 -->
@@ -19,6 +20,8 @@
     <string name="btn_download_images">下载全部图片</string>
     <string name="btn_download_live_photo">下载Live静态封面</string>
     <string name="btn_download_live_video">下载全部Live动态短片</string>
+    <string name="btn_download_all_live_photos">下载全部Live图</string>
+    <string name="btn_download_selected_live_photos">下载所选Live图 (%1$d)</string>
 
     <!-- Cookie 设置对话框 -->
     <string name="cookie_dialog_title">设置抖音Cookie</string>
@@ -101,10 +104,12 @@
     <string name="history_option_video">视频下载记录</string>
     <string name="history_option_image">图片下载记录</string>
     <string name="history_option_live">Live 动态短片下载记录</string>
+    <string name="history_option_live_composed">Live 图片合成记录</string>
     <string name="history_option_clear_all">删除所有历史记录</string>
     <string name="history_list_title_video">视频下载记录</string>
     <string name="history_list_title_image">图片下载记录</string>
     <string name="history_list_title_live">Live 动态短片下载记录</string>
+    <string name="history_list_title_live_composed">Live 图片合成记录</string>
     <string name="history_empty">暂无下载记录</string>
     <string name="history_select_all">全选</string>
     <string name="history_deselect_all">取消全选</string>
@@ -143,6 +148,13 @@
     <string name="batch_toast_done_with_failures">下载完成：%1$d 个成功，%2$d 个失败</string>
     <string name="batch_toast_all_success">下载完成：%1$d 个文件</string>
     <string name="batch_toast_cancelled">已取消下载</string>
+
+    <!-- Live 图批量合成 -->
+    <string name="compose_progress_title">合成 Live 图中…</string>
+    <string name="compose_progress_file_label">正在合成第 %1$d / %2$d 张</string>
+    <string name="compose_progress_action_background">后台合成</string>
+    <string name="compose_toast_all_success">合成完成：%1$d 张 Live 图</string>
+    <string name="compose_toast_with_failures">合成完成：%1$d 张成功，%2$d 张失败</string>
     <string name="notify_channel_download_name">下载进度</string>
     <string name="notify_channel_download_desc">显示后台批量下载的进度通知。</string>
     <string name="notify_title_downloading">正在下载（%1$d / %2$d）</string>
@@ -150,4 +162,9 @@
     <string name="notify_text_done_success">%1$d 个文件已保存到相册</string>
     <string name="notify_text_done_partial">%1$d 个成功，%2$d 个失败</string>
     <string name="notify_text_downloading">正在下载第 %1$d / %2$d 个</string>
+    <string name="notify_title_composing">正在合成 Live 图（%1$d / %2$d）</string>
+    <string name="notify_title_compose_done">Live 图合成完成</string>
+    <string name="notify_text_composing">正在合成第 %1$d / %2$d 张</string>
+    <string name="notify_text_compose_done_success">%1$d 张 Live 图已保存到相册</string>
+    <string name="notify_text_compose_done_partial">%1$d 张成功，%2$d 张失败（源文件已保留）</string>
 </resources>

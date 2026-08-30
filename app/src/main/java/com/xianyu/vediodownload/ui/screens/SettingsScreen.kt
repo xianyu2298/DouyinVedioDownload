@@ -42,7 +42,7 @@ import kotlinx.coroutines.withContext
  *  - SubPage.HISTORY_VIDEO / IMAGE / LIVE → 对应分类列表
  *  - SubPage.LIVE_COMPOSE → Live 图合成页面
  */
-private enum class SubPage { HISTORY_HOME, HISTORY_VIDEO, HISTORY_IMAGE, HISTORY_LIVE, LIVE_COMPOSE }
+private enum class SubPage { HISTORY_HOME, HISTORY_VIDEO, HISTORY_IMAGE, HISTORY_LIVE, HISTORY_LIVE_COMPOSED, LIVE_COMPOSE }
 
 @Composable
 fun SettingsScreen(
@@ -66,7 +66,8 @@ fun SettingsScreen(
         subPage = when (subPage) {
             null -> null
             SubPage.HISTORY_HOME -> null
-            SubPage.HISTORY_VIDEO, SubPage.HISTORY_IMAGE, SubPage.HISTORY_LIVE -> SubPage.HISTORY_HOME
+            SubPage.HISTORY_VIDEO, SubPage.HISTORY_IMAGE,
+            SubPage.HISTORY_LIVE, SubPage.HISTORY_LIVE_COMPOSED -> SubPage.HISTORY_HOME
             SubPage.LIVE_COMPOSE -> null
         }
     }
@@ -105,9 +106,11 @@ fun SettingsScreen(
                         HistoryCategory.IMAGE -> SubPage.HISTORY_IMAGE
                         HistoryCategory.LIVE_IMAGE, HistoryCategory.LIVE_VIDEO ->
                             SubPage.HISTORY_LIVE
+                        HistoryCategory.LIVE_COMPOSED_PHOTO -> SubPage.HISTORY_LIVE_COMPOSED
                     }
                 },
                 onOpenLivePhotos = { subPage = SubPage.HISTORY_LIVE },
+                onOpenLiveComposed = { subPage = SubPage.HISTORY_LIVE_COMPOSED },
             )
             SubPage.HISTORY_VIDEO -> HistoryListScreen(
                 title = stringResource(R.string.history_list_title_video),
@@ -120,6 +123,12 @@ fun SettingsScreen(
                 onBack = { subPage = SubPage.HISTORY_HOME },
             )
             SubPage.HISTORY_LIVE -> HistoryLivePhotoListScreen(
+                onBack = { subPage = SubPage.HISTORY_HOME },
+            )
+            SubPage.HISTORY_LIVE_COMPOSED -> HistoryListScreen(
+                // 直接复用 HistoryListScreen：合成 Live 图是扁平列表（非配对），用通用列表 UI 即可
+                title = stringResource(R.string.history_list_title_live_composed),
+                category = HistoryCategory.LIVE_COMPOSED_PHOTO,
                 onBack = { subPage = SubPage.HISTORY_HOME },
             )
             SubPage.LIVE_COMPOSE -> LivePhotoComposeScreenContent(

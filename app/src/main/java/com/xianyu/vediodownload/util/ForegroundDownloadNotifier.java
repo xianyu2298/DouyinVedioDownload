@@ -139,6 +139,68 @@ public final class ForegroundDownloadNotifier {
     /** 用户主动清除（如关闭应用回到前台时） */
     public static void cancel(Context context) {
         NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID);
+        NotificationManagerCompat.from(context).cancel(COMPOSE_NOTIFICATION_ID);
+    }
+
+    // ====================== 合成阶段通知（独立 ID，不与下载通知冲突） ======================
+
+    public static final int COMPOSE_NOTIFICATION_ID = 0xD072;
+
+    /**
+     * 合成开始：贴一条"正在合成 Live 图 (1/N)"通知。
+     */
+    public static void startCompose(Context context, int total) {
+        ensureChannel(context);
+        if (!hasPostPermission(context)) return;
+        NotificationManagerCompat nm = NotificationManagerCompat.from(context);
+        NotificationCompat.Builder builder = baseBuilder(context)
+                .setContentTitle(context.getString(R.string.notify_title_composing, 1, total))
+                .setContentText(context.getString(R.string.notify_text_composing, 1, total))
+                .setProgress(100, 0, false)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true);
+        try {
+            nm.notify(COMPOSE_NOTIFICATION_ID, builder.build());
+        } catch (SecurityException ignored) {
+        }
+    }
+
+    public static void updateCompose(Context context, int currentIndex, int total) {
+        if (!hasPostPermission(context)) return;
+        int safeCurrent = Math.max(1, currentIndex);
+        int safeTotal = Math.max(safeCurrent, total);
+        NotificationCompat.Builder builder = baseBuilder(context)
+                .setContentTitle(context.getString(R.string.notify_title_composing, safeCurrent, safeTotal))
+                .setContentText(context.getString(R.string.notify_text_composing, safeCurrent, safeTotal))
+                .setProgress(100, (int) (((long) safeCurrent * 100L) / safeTotal), false)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true);
+        try {
+            NotificationManagerCompat.from(context).notify(COMPOSE_NOTIFICATION_ID, builder.build());
+        } catch (SecurityException ignored) {
+        }
+    }
+
+    public static void finishCompose(Context context, int successCount, int failureCount) {
+        if (!hasPostPermission(context)) return;
+        String title = context.getString(R.string.notify_title_compose_done);
+        String text;
+        if (failureCount == 0) {
+            text = context.getString(R.string.notify_text_compose_done_success, successCount);
+        } else {
+            text = context.getString(R.string.notify_text_compose_done_partial, successCount, failureCount);
+        }
+        NotificationCompat.Builder builder = baseBuilder(context)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setProgress(0, 0, false)
+                .setOngoing(false)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(false);
+        try {
+            NotificationManagerCompat.from(context).notify(COMPOSE_NOTIFICATION_ID, builder.build());
+        } catch (SecurityException ignored) {
+        }
     }
 
     private static NotificationCompat.Builder baseBuilder(Context context) {

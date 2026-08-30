@@ -1,8 +1,11 @@
 package com.xianyu.vediodownload.ui.screens
 
 import android.app.Application
+import android.content.ContentValues
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
@@ -18,6 +21,8 @@ import com.xianyu.vediodownload.douyin.exception.WorkListFetchException
 import com.xianyu.vediodownload.util.CookieManager
 import com.xianyu.vediodownload.util.DownloaderBridge
 import com.xianyu.vediodownload.util.ForegroundDownloadNotifier
+import com.xianyu.vediodownload.util.LivePhotoMaker
+import com.xianyu.vediodownload.util.looksLikeDouyinShareLink
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +31,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 
 class DownloadViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
@@ -67,6 +74,38 @@ data class BatchSession(
     val active: Boolean = false,
 )
 
+/**
+ * Live 图批量合成会话：完成下载后进入此会话，依次合成每对 cover + video。
+ *
+ * - [current] / [total]：1-based 当前合成序号 / 总对数。
+ * - [percent]：当前合成步骤的内部进度（0..100）。
+ * - [dialogDismissed]：用户是否点过"后台合成"，与 BatchSession 同语义。
+ * - [successCount] / [failureCount]：成功合成 / 跳过的对数（cover 或 video 缺失视为跳过）。
+ * - [phase]：当前阶段（DONE 表示整个流程已结束）。
+ */
+enum class ComposePhase { DOWNLOADING, COMPOSING, DONE }
+
+data class LiveComposeSession(
+    val total: Int = 0,
+    val current: Int = 0,
+    val percent: Int = 0,
+    val dialogDismissed: Boolean = false,
+    val successCount: Int = 0,
+    val failureCount: Int = 0,
+    val phase: ComposePhase = ComposePhase.DOWNLOADING,
+    val active: Boolean = false,
+)
+
+/**
+ * 单对 cover + video 的下载结果（Live 图合成流水线的中间产物）。
+ * 任一为 null 表示下载失败；合成阶段任一缺失即跳过整对。
+ * 与 HistoryScreens.kt 中以 "baseName" 为键的历史对类型不同，本类用于 in-memory 流水线。
+ */
+data class LiveComposePair(
+    val coverUri: Uri? = null,
+    val videoUri: Uri? = null,
+)
+
 data class DownloadUiState(
     val url: String = "",
     val isLoading: Boolean = false,
@@ -82,6 +121,8 @@ data class DownloadUiState(
     val selectedLiveIndices: Set<Int> = emptySet(),  // 同时用于静态封面和动态短片
     // 批量下载会话（null 表示当前无下载任务）
     val batch: BatchSession? = null,
+    // Live 图批量合成会话（null 表示当前无合成任务）
+    val compose: LiveComposeSession? = null,
 )
 
 class DownloadViewModel(application: Application) : AndroidViewModel(application) {
@@ -97,6 +138,14 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
     private var lastNotifyAt = 0L
 
     private var cachedProfile: AwemeProfile? = null
+
+    // ========== Live 图批量合成流水线（私有状态） ==========
+    // 用于在 BatchSession 下载阶段捕获每对 cover / video 的 URI，
+    // 待下载完成后进入 LiveComposeSession 合成阶段。
+    private val pendingComposePairs = mutableListOf<LiveComposePair>()
+    // 当下载批次属于"下载全部 Live 图"流程时置 true，使 finalizeBatch 不弹"下载完成"
+    // Toast / 通知，而是直接把控制权交给 startComposePhase()。
+    private var suppressBatchFinalization = false
 
     fun updateUrl(url: String) {
         _uiState.update { it.copy(url = url, error = null) }
@@ -378,6 +427,128 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
+     * 全部 Live 图下载 + 合成：先顺序下载所有对（cover → video → cover → video → ...），
+     * 全部完成后自动进入合成阶段。整对 cover / video 任一缺失则跳过合成，但保留源文件。
+     */
+    fun downloadAllLivePhotos() {
+        val profile = cachedProfile ?: return
+        val pairs = computeAllLivePairs(profile)
+        if (pairs.isEmpty()) return
+        startLivePhotoFlow(profile, pairs)
+    }
+
+    /** 选择模式下：只把已选中的若干对 cover + video 拉下来再合成。 */
+    fun downloadSelectedLivePhotosCompose() {
+        val profile = cachedProfile ?: return
+        val selectedUi = _uiState.value.selectedLiveIndices.toList().sorted()
+        if (selectedUi.isEmpty()) return
+        val pairs = selectedUi.mapNotNull { uiIdx ->
+            val coverIdx = uiIdx * 2
+            val videoIdx = uiIdx * 2 + 1
+            val types = profile.imageMediaTypes()
+            if (videoIdx < types.size) coverIdx to videoIdx else null
+        }
+        if (pairs.isEmpty()) return
+        startLivePhotoFlow(profile, pairs)
+    }
+
+    /**
+     * 筛选 profile 中所有"cover(IMAGE) + video(LIVE_VIDEO)"对，按出现顺序返回原始索引对。
+     * 与 downloadLivePhoto / downloadLiveVideo 的筛选规则保持一致。
+     */
+    private fun computeAllLivePairs(profile: AwemeProfile): List<Pair<Int, Int>> {
+        val types = profile.imageMediaTypes()
+        return types.indices
+            .filter { it % 2 == 0 && it + 1 < types.size
+                    && types[it] == MediaType.IMAGE && types[it + 1] == MediaType.VIDEO }
+            .map { it to (it + 1) }
+    }
+
+    /**
+     * 启动"下载全部 Live 图"流水线：
+     *   Phase 1 (DOWNLOADING)：按对顺序下载 cover / video，共 N*2 个文件，复用 BatchSession 进度。
+     *   Phase 2 (COMPOSING)：逐对用 LivePhotoMaker.createMotionPhoto 合成，独立的 LiveComposeSession。
+     *
+     * 通过 suppressBatchFinalization 拦截 finalizeBatch，使下载完成时不弹"下载完成"Toast / 通知，
+     * 紧接着切到合成阶段。
+     */
+    private fun startLivePhotoFlow(profile: AwemeProfile, pairs: List<Pair<Int, Int>>) {
+        pendingComposePairs.clear()
+        repeat(pairs.size) { pendingComposePairs.add(LiveComposePair()) }
+        suppressBatchFinalization = true
+
+        val totalFiles = pairs.size * 2
+        startBatch(total = totalFiles) {
+            // 按"对"顺序提交：pair[0].cover → pair[0].video → pair[1].cover → pair[1].video → ...
+            pairs.forEachIndexed { pairIdx, (coverIdx, videoIdx) ->
+                downloadOneCaptured(profile, coverIdx, MediaType.IMAGE) { uri ->
+                    if (pairIdx < pendingComposePairs.size) {
+                        pendingComposePairs[pairIdx] = pendingComposePairs[pairIdx].copy(coverUri = uri)
+                    }
+                }
+                if (pairIdx < pairs.lastIndex || videoIdx != coverIdx + 1) {
+                    delay(800)
+                }
+                downloadOneCaptured(profile, videoIdx, MediaType.LIVE_VIDEO) { uri ->
+                    if (pairIdx < pendingComposePairs.size) {
+                        pendingComposePairs[pairIdx] = pendingComposePairs[pairIdx].copy(videoUri = uri)
+                    }
+                }
+                if (pairIdx < pairs.lastIndex) {
+                    delay(800)
+                }
+            }
+        }
+    }
+
+    /**
+     * 与 [downloadOne] 行为相同，但额外提供一个 onComplete 回调，把成功时的 MediaStore URI 抛回来，
+     * 供 Live Photo 流水线记入 pendingComposePairs。失败时回调 null。
+     */
+    private fun downloadOneCaptured(
+        profile: AwemeProfile,
+        index: Int,
+        overrideType: MediaType,
+        onComplete: (Uri?) -> Unit,
+    ) {
+        val cookie = cookieManager.getCookie()
+        downloaderBridge.download(profile, index, cookie, overrideType,
+            object : DownloaderBridge.ProgressListener {
+                override fun onProgress(percent: Int, downloaded: Long, total: Long) {
+                    mainHandler.post {
+                        val current = _uiState.value.batch ?: return@post
+                        _uiState.update {
+                            it.copy(batch = current.copy(percent = percent))
+                        }
+                        notifyProgressThrottled()
+                    }
+                }
+            },
+            object : DownloaderBridge.CompleteListener {
+                override fun onSuccess(savedPath: String) {
+                    val parsed = runCatching { Uri.parse(savedPath) }.getOrNull()
+                    onComplete(parsed)
+                    mainHandler.post {
+                        recordSuccess()
+                        advanceFile()
+                        notifyProgressThrottled(force = true)
+                        finalizeBatchIfFinished()
+                    }
+                }
+
+                override fun onError(error: Throwable) {
+                    onComplete(null)
+                    mainHandler.post {
+                        recordFailure()
+                        advanceFile()
+                        notifyProgressThrottled(force = true)
+                        finalizeBatchIfFinished()
+                    }
+                }
+            })
+    }
+
+    /**
      * 用户点击"后台下载"：把 dialogDismissed 置 true，弹窗即在 UI 层不再展示，但下载任务
      * 仍在 viewModelScope 中跑。后续进度通过 ForegroundDownloadNotifier 推送通知。
      */
@@ -393,14 +564,22 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * UI 返回前台时调用：如果当前批次已经在跑，清掉通知里残留的"完成"和持续进度条，弹窗交还给用户。
+     * UI 返回前台时调用：
+     * 1) 清掉通知栏残留的"下载完成 / 合成完成"等持续通知；
+     * 2) 如果当前有活跃的下载 / 合成批次，把 dialogDismissed 重置为 false，把弹窗交还给用户。
      */
     fun onForegroundReturned() {
         ForegroundDownloadNotifier.cancel(getApplication())
-        val current = _uiState.value.batch
-        if (current != null && current.active) {
+        val batch = _uiState.value.batch
+        if (batch != null && batch.active) {
             _uiState.update {
-                it.copy(batch = current.copy(dialogDismissed = false))
+                it.copy(batch = batch.copy(dialogDismissed = false))
+            }
+        }
+        val compose = _uiState.value.compose
+        if (compose != null && compose.active) {
+            _uiState.update {
+                it.copy(compose = compose.copy(dialogDismissed = false))
             }
         }
     }
@@ -440,13 +619,186 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
     /**
      * 真正的批次收尾：当累计成功+失败达到 total 才推"下载完成"通知和一次性 Toast。
      * 这样无论"提交循环"何时返回，通知 / Toast 都精确反映"最后一个文件已完成"的时刻。
+     *
+     * 例外：当 [suppressBatchFinalization] 为 true（"下载全部 Live 图"流程），跳过标准的
+     * 下载完成 Toast / 通知，直接把控制权交给 [startComposePhase] 进入合成阶段。
      */
     private fun finalizeBatchIfFinished() {
         val batch = _uiState.value.batch ?: return
         if (!batch.active) return
         val completed = batch.successCount + batch.failureCount
         if (completed < batch.total) return  // 还有文件在跑，等下一次回调
+        if (suppressBatchFinalization) {
+            suppressBatchFinalization = false
+            _uiState.update { it.copy(batch = null) }
+            startComposePhase()
+            return
+        }
         finalizeBatch()
+    }
+
+    // ========== 内部：Live 图合成阶段（独立于下载会话） ==========
+
+    /**
+     * 把已下载的所有 cover / video 对依次合成。任一对缺一个就跳过（保留源文件给用户手动重试）。
+     * 合成成功后删除源 cover + video（避免相册堆积）。
+     */
+    private fun startComposePhase() {
+        val pairs = pendingComposePairs.toList()
+        if (pairs.isEmpty()) {
+            // 没有任何对，直接收尾
+            finalizeCompose(0, 0)
+            return
+        }
+        _uiState.update {
+            it.copy(
+                compose = LiveComposeSession(
+                    total = pairs.size,
+                    current = 1,
+                    percent = 0,
+                    dialogDismissed = false,
+                    successCount = 0,
+                    failureCount = 0,
+                    phase = ComposePhase.COMPOSING,
+                    active = true,
+                )
+            )
+        }
+        // 关掉下载阶段的进度通知，发"正在合成"通知
+        ForegroundDownloadNotifier.cancel(getApplication())
+        ForegroundDownloadNotifier.startCompose(getApplication(), pairs.size)
+
+        viewModelScope.launch {
+            pairs.forEachIndexed { idx, pair ->
+                val success = composeOneLivePhoto(idx, pair)
+                mainHandler.post {
+                    val current = _uiState.value.compose ?: return@post
+                    val nextCurrent = (current.current + 1).coerceAtMost(current.total + 1)
+                    val nextSuccess = current.successCount + (if (success) 1 else 0)
+                    val nextFailure = current.failureCount + (if (success) 0 else 1)
+                    _uiState.update {
+                        it.copy(
+                            compose = current.copy(
+                                current = nextCurrent,
+                                percent = 0,
+                                successCount = nextSuccess,
+                                failureCount = nextFailure,
+                            )
+                        )
+                    }
+                    ForegroundDownloadNotifier.updateCompose(
+                        getApplication(),
+                        nextCurrent.coerceAtMost(current.total),
+                        current.total,
+                    )
+                    if (nextSuccess + nextFailure >= current.total) {
+                        finalizeCompose(nextSuccess, nextFailure)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 合成单张 Live 图。返回 true 表示合成成功，false 表示跳 / 失败。
+     * - 任一 URI 为空 → 跳过（保留源文件）
+     * - 合成成功 → 删除源 cover + video
+     * - 合成失败 → 保留源文件
+     */
+    private suspend fun composeOneLivePhoto(@Suppress("UNUSED_PARAMETER") pairIndex: Int, pair: LiveComposePair): Boolean {
+        val coverUri = pair.coverUri
+        val videoUri = pair.videoUri
+        if (coverUri == null || videoUri == null) return false
+
+        val app = getApplication<Application>()
+        val tmpDir = File(app.cacheDir, "live_compose_${System.currentTimeMillis()}_$pairIndex")
+        tmpDir.mkdirs()
+        return try {
+            updateComposeProgress(15)
+            val videoFile = File(tmpDir, "input_video.mp4")
+            copyUriToFile(videoUri, videoFile)
+            if (!videoFile.exists() || videoFile.length() == 0L) {
+                return false
+            }
+            updateComposeProgress(30)
+            val coverFile = File(tmpDir, "input_cover.jpg")
+            copyUriToFile(coverUri, coverFile)
+
+            updateComposeProgress(45)
+            val outputFileName = "LivePhoto_${System.currentTimeMillis()}_$pairIndex"
+            val result = LivePhotoMaker.createMotionPhoto(
+                context = app,
+                videoPath = videoFile.absolutePath,
+                coverPath = coverFile.absolutePath,
+                outputFileName = outputFileName,
+                quality = LivePhotoMaker.QUALITY_BALANCED,
+                presentationTimestampUs = 1_000_000,
+                resize = null,
+                onProgress = { pct ->
+                    updateComposeProgress(45 + pct * 50 / 100)
+                }
+            )
+            updateComposeProgress(98)
+            if (result != null) {
+                // 合成成功：删除源文件（best-effort，失败也不影响本次结果）
+                runCatching { app.contentResolver.delete(coverUri, null, null) }
+                runCatching { app.contentResolver.delete(videoUri, null, null) }
+                true
+            } else {
+                false
+            }
+        } catch (_: Throwable) {
+            false
+        } finally {
+            tmpDir.deleteRecursively()
+        }
+    }
+
+    private fun updateComposeProgress(percent: Int) {
+        mainHandler.post {
+            _uiState.update {
+                val current = it.compose ?: return@post
+                it.copy(compose = current.copy(percent = percent.coerceIn(0, 100)))
+            }
+        }
+    }
+
+    private fun copyUriToFile(uri: Uri, dest: File) {
+        val app = getApplication<Application>()
+        app.contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(dest).use { output ->
+                input.copyTo(output)
+            }
+        } ?: throw java.io.IOException("openInputStream returned null for $uri")
+    }
+
+    private fun finalizeCompose(success: Int, failure: Int) {
+        ForegroundDownloadNotifier.finishCompose(getApplication(), success, failure)
+        val message = if (failure == 0) {
+            "合成完成：$success 张 Live 图"
+        } else {
+            "合成完成：$success 张成功，$failure 张失败"
+        }
+        Toast.makeText(getApplication(), message, Toast.LENGTH_LONG).show()
+        // 清理 pending 列表，避免下一次误用
+        pendingComposePairs.clear()
+        _uiState.update { it.copy(compose = null) }
+    }
+
+    /** 用户点击"后台合成"：隐藏合成弹窗，保留后台任务 + 通知。 */
+    fun dismissComposeDialog() {
+        val current = _uiState.value.compose ?: return
+        if (!current.active) return
+        _uiState.update {
+            it.copy(compose = current.copy(dialogDismissed = true))
+        }
+        // 清掉旧通知，立刻补一条当前进度的合成通知，避免通知栏空白
+        ForegroundDownloadNotifier.cancel(getApplication())
+        ForegroundDownloadNotifier.updateCompose(
+            getApplication(),
+            current.current.coerceAtMost(current.total),
+            current.total,
+        )
     }
 
     private fun finalizeBatch() {
@@ -553,20 +905,4 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
             batch.percent,
         )
     }
-}
-
-/**
- * 快速校验用户粘贴的内容是否"看起来像"抖音分享链接/文案。
- * 命中下列任一规则即视为通过：
- *  1. URL 域名属于 douyin.com / iesdouyin.com
- *  2. 文本中包含 http(s):// 链接（让下载器内部再做 host 校验）
- *  3. 抖音 App 分享口令关键字（"复制链接"、"打开抖音"、"https://v.douyin.com/" 等）
- *  4. 含纯数字作品 ID（长度 15~20）
- */
-private fun looksLikeDouyinShareLink(text: String): Boolean {
-    val lower = text.lowercase()
-    if ("douyin.com" in lower || "iesdouyin" in lower) return true
-    if (Regex("""https?://""").containsMatchIn(text)) return true
-    if (Regex("""\b\d{15,20}\b""").containsMatchIn(text)) return true
-    return false
 }

@@ -61,7 +61,8 @@ fun LiveScreen(
     val liveVideoUrls = uiState.preview?.liveVideoUrls?.split("|||")?.filter { it.isNotEmpty() } ?: emptyList()
     val cookieManager = remember { CookieManager(context.applicationContext) }
 
-    // null = 不弹窗, "cover" = 全部封面, "video" = 下载Live动态短片
+    // null = 不弹窗, "cover" = 全部封面, "video" = 下载Live动态短片,
+    // "live" = 下载全部 Live 图（封面 + 短片 + 后台合成）
     var batchConfirmTarget by remember { mutableStateOf<String?>(null) }
 
     if (batchConfirmTarget != null) {
@@ -70,6 +71,7 @@ fun LiveScreen(
                 when (batchConfirmTarget) {
                     "cover" -> viewModel.downloadLivePhoto()
                     "video" -> viewModel.downloadLiveVideo()
+                    "live" -> viewModel.downloadAllLivePhotos()
                 }
                 batchConfirmTarget = null
             },
@@ -235,6 +237,7 @@ fun LiveScreen(
 
                     Spacer(modifier = Modifier.height(20.dp))
 
+                    // 第一行：分开下载封面 / 短片
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -252,6 +255,17 @@ fun LiveScreen(
                             modifier = Modifier.weight(1f),
                         )
                     }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // 第二行：合成 Live 图（成对下载 + 后台合成）
+                    NeumorphicButton(
+                        text = "下载所选Live图 (${uiState.selectedLiveIndices.size})",
+                        onClick = { viewModel.downloadSelectedLivePhotosCompose() },
+                        enabled = uiState.selectedLiveIndices.isNotEmpty(),
+                        modifier = Modifier.fillMaxWidth(),
+                        isPrimary = true,
+                    )
                 } else {
                     // 预览模式
                     Spacer(modifier = Modifier.height(12.dp))
@@ -298,13 +312,23 @@ fun LiveScreen(
                             isPrimary = true,
                         )
                         NeumorphicButton(
-                            text = "下载全部封面",
-                            onClick = { batchConfirmTarget = "cover" },
+                            text = stringResource(R.string.btn_download_all_live_photos),
+                            onClick = { batchConfirmTarget = "live" },
                             modifier = Modifier.weight(1f),
                             isPrimary = false,
                             isDanger = true,
                         )
                     }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    NeumorphicButton(
+                        text = stringResource(R.string.btn_download_live_photo),
+                        onClick = { batchConfirmTarget = "cover" },
+                        modifier = Modifier.fillMaxWidth(),
+                        isPrimary = false,
+                        isDanger = true,
+                    )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
@@ -327,6 +351,16 @@ fun LiveScreen(
         BatchDownloadProgressDialog(
             session = session,
             onBackground = { viewModel.dismissBatchDialog() },
+        )
+    }
+
+    // Live 图批量合成弹窗：在下载阶段完成后由 ViewModel 自动切到这里，
+    // 标题"合成 Live 图中…"、正文"正在合成第 N / M 张"。
+    val composeSession = uiState.compose
+    if (composeSession != null && composeSession.active && !composeSession.dialogDismissed) {
+        LiveComposeProgressDialog(
+            session = composeSession,
+            onBackground = { viewModel.dismissComposeDialog() },
         )
     }
 }
