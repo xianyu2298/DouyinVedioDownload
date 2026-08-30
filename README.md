@@ -16,7 +16,7 @@
 
 
 
-![作者主页下载](E:\VedioDownload\readme图片\作者主页下载.jpg)
+![作者主页下载](readme图片/作者主页下载.jpg)
 
 ## 🔧 技术原理
 
