@@ -38,6 +38,11 @@ import androidx.core.view.WindowCompat
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 
+private const val PREVIEW_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+private const val PREVIEW_REFERER = "https://www.douyin.com/"
+
 class ImagePreviewActivity : AppCompatActivity() {
 
     private var imageUrls: String = ""
@@ -83,17 +88,27 @@ private fun ImagePreviewContent(
 
     val context = LocalContext.current
     val imageList = remember { imageUrls.split("|||").filter { it.isNotEmpty() } }
-    var currentIndex by remember { mutableIntStateOf(startIndex) }
+    var currentIndex by remember { mutableIntStateOf(startIndex.coerceIn(0, (imageList.size - 1).coerceAtLeast(0))) }
     val listState = rememberLazyListState()
 
     val currentUrl = imageList.getOrNull(currentIndex) ?: ""
 
+    // 切换图片时重置缩放，并让底部缩略图条跟随（首次进入直接定位，切换时居中）
     LaunchedEffect(currentIndex) {
         scale = 1f
         offsetX = 0f
         offsetY = 0f
         if (imageList.size > currentIndex) {
-            listState.animateScrollToItem(currentIndex)
+            // 居中当前缩略图
+            val layoutInfo = listState.layoutInfo
+            val viewportSize = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
+            val itemInfo = layoutInfo.visibleItemsInfo.firstOrNull { it.index == currentIndex }
+            if (itemInfo != null) {
+                val targetOffset = itemInfo.offset - (viewportSize / 2) + (itemInfo.size / 2)
+                listState.animateScrollToItem(currentIndex, targetOffset)
+            } else {
+                listState.animateScrollToItem(currentIndex)
+            }
         }
     }
 
@@ -112,8 +127,8 @@ private fun ImagePreviewContent(
                 model = ImageRequest.Builder(context)
                     .data(currentUrl)
                     .crossfade(true)
-                    .addHeader("Referer", "https://www.douyin.com/")
-                    .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    .addHeader("Referer", PREVIEW_REFERER)
+                    .addHeader("User-Agent", PREVIEW_UA)
                     .build(),
                 contentDescription = "图片预览",
                 contentScale = ContentScale.Fit,
@@ -241,8 +256,8 @@ private fun ImagePreviewContent(
                                         model = ImageRequest.Builder(context)
                                             .data(url)
                                             .crossfade(true)
-                                            .addHeader("Referer", "https://www.douyin.com/")
-                                            .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                                            .addHeader("Referer", PREVIEW_REFERER)
+                                            .addHeader("User-Agent", PREVIEW_UA)
                                             .build(),
                                         contentDescription = "缩略图 ${index + 1}",
                                         contentScale = ContentScale.Crop,

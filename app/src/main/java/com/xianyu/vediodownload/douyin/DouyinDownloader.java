@@ -49,9 +49,30 @@ public final class DouyinDownloader {
   private static final int MIX_PAGE_SIZE = 12;
   private static final String[] TRUSTED_SHARE_HOSTS = {"douyin.com", "iesdouyin.com"};
   private static final String[] TRUSTED_COOKIE_HOSTS = {"douyin.com", "iesdouyin.com"};
+  // 必须与 a_bogus 签名使用的 UA 一致（第三条摘要链与其绑定），
+  // 且浏览器指纹参数（browser_name/browser_version/engine_version/browser_platform）
+  // 必须与之匹配，否则签名校验失败。
   private static final String DEFAULT_USER_AGENT =
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
-  private static final String DEFAULT_REFERER = "https://www.douyin.com/";
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+          + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
+  private static final String DEFAULT_REFERER = "https://www.douyin.com/?recommend=1";
+  // 抖音对以下受保护接口要求附加 x-secsdk-web-signature，否则返回 403 Uifid Not Found
+  private static final String[] SIGNED_PATHS = {
+    "/aweme/v1/web/aweme/detail/",
+    "/aweme/v1/web/aweme/post/",
+    "/aweme/v1/web/aweme/favorite/",
+    "/aweme/v1/web/aweme/listcollection/",
+    "/aweme/v1/web/mix/aweme/",
+    "/aweme/v1/web/tab/feed/",
+    "/aweme/v1/web/mix/list/",
+    "/aweme/v1/web/music/aweme/",
+    "/aweme/v1/web/music/list/",
+    "/aweme/v1/web/mix/detail/",
+    "/aweme/v1/web/mix/listcollection/",
+    "/aweme/v1/web/music/detail/",
+    "/aweme/v1/web/collects/list/",
+    "/aweme/v1/web/collects/video/list/",
+  };
   private final OkHttpClient httpClient;
   private final ObjectMapper objectMapper;
   private final ABogusGenerator aBogusGenerator;
@@ -422,7 +443,7 @@ public final class DouyinDownloader {
     while (hasMore && pageCount < DEFAULT_MAX_PAGES) {
       Map<String, String> extraParams = buildAccountListParams(secUserId, cursor);
 
-      String query = buildWebListQuery(extraParams, cookie);
+      String query = buildWebListQuery(extraParams, cookie, "https://www.douyin.com/aweme/v1/web/aweme/post/");
       JsonNode pageData =
           fetchPagedAwemeList(
               Arrays.asList(
@@ -479,7 +500,7 @@ public final class DouyinDownloader {
       extraParams.put("cursor", String.valueOf(cursor));
       extraParams.put("count", String.valueOf(MIX_PAGE_SIZE));
 
-      String query = buildWebListQuery(extraParams, cookie);
+      String query = buildWebListQuery(extraParams, cookie, "https://www.douyin.com/aweme/v1/web/mix/aweme/");
       JsonNode pageData =
           fetchPagedAwemeList(
               Arrays.asList(
@@ -679,15 +700,15 @@ public final class DouyinDownloader {
   private String buildWebDetailQuery(String awemeId, String cookie) {
     Map<String, String> params = buildCommonWebParams(cookie, "190500", "19.5.0");
     params.put("aweme_id", awemeId);
-    return encodeQueryWithABogus(params);
+    return buildSignedQuery("https://www.douyin.com/aweme/v1/web/aweme/detail/", params);
   }
 
-  private String buildWebListQuery(Map<String, String> extraParams, String cookie) {
+  private String buildWebListQuery(Map<String, String> extraParams, String cookie, String apiUrl) {
     Map<String, String> params = buildCommonWebParams(cookie, "170400", "17.4.0");
     if (extraParams != null) {
       params.putAll(extraParams);
     }
-    return encodeQueryWithABogus(params);
+    return buildSignedQuery(apiUrl, params);
   }
 
   private Map<String, String> buildCommonWebParams(
@@ -705,7 +726,7 @@ public final class DouyinDownloader {
     params.put("channel", "channel_pc_web");
     params.put("update_version_code", "170400");
     params.put("pc_client_type", "1");
-    params.put("pc_libra_divert", "Windows");
+    params.put("pc_libra_divert", "Mac");
     params.put("support_h265", "1");
     params.put("support_dash", "1");
     params.put("version_code", versionCode);
@@ -714,14 +735,14 @@ public final class DouyinDownloader {
     params.put("screen_width", "1536");
     params.put("screen_height", "864");
     params.put("browser_language", "zh-CN");
-    params.put("browser_platform", "Win32");
+    params.put("browser_platform", "MacIntel");
     params.put("browser_name", "Chrome");
-    params.put("browser_version", "139.0.0.0");
+    params.put("browser_version", "146.0.0.0");
     params.put("browser_online", "true");
     params.put("engine_name", "Blink");
-    params.put("engine_version", "139.0.0.0");
-    params.put("os_name", "Windows");
-    params.put("os_version", "10");
+    params.put("engine_version", "146.0.0.0");
+    params.put("os_name", "Mac OS");
+    params.put("os_version", "10.15.7");
     params.put("cpu_core_num", "16");
     params.put("device_memory", "8");
     params.put("platform", "PC");
@@ -733,10 +754,66 @@ public final class DouyinDownloader {
     return params;
   }
 
-  private String encodeQueryWithABogus(Map<String, String> params) {
-    String encodedQuery = encodeQueryParams(params);
-    Optional<String> aBogus = generateABogus(encodedQuery);
-    return aBogus.map(string -> encodedQuery + "&a_bogus=" + string).orElse(encodedQuery);
+  /**
+   * 构造最终签名的 query：a_bogus 始终附加；受保护接口且 query 含 uifid 时，
+   * 先按 WebSign 规范化 query 再计算 a_bogus，最后追加 timestamp 与
+   * x-secsdk-web-signature。
+   */
+  private String buildSignedQuery(String apiUrl, Map<String, String> params) {
+    String query = encodeQueryParams(params);
+    String uifid = isSignProtected(apiUrl) ? extractQueryValue(query, "uifid") : "";
+    // 受保护接口且携带 uifid 时才走 WebSign
+    boolean webSign = !uifid.isEmpty();
+    if (webSign) {
+      query = WebSignGenerator.normalizeQuery(query);
+    }
+    String aBogus = aBogusGenerator.getValue(query);
+    // s4 字母表包含 "/" 与 "=" 填充，发送前需百分号编码
+    String signedQuery = query + "&a_bogus=" + WebSignGenerator.quote(aBogus, "");
+    if (webSign) {
+      signedQuery = WebSignGenerator.sign(signedQuery, uifid, System.currentTimeMillis() / 1000L);
+    }
+    return signedQuery;
+  }
+
+  private static boolean isSignProtected(String apiUrl) {
+    String path;
+    try {
+      path = URI.create(apiUrl).getPath();
+    } catch (Exception e) {
+      return false;
+    }
+    if (path == null) {
+      path = "";
+    }
+    if (!path.startsWith("/")) {
+      path = "/" + path;
+    }
+    if (!path.endsWith("/")) {
+      path += "/";
+    }
+    for (String candidate : SIGNED_PATHS) {
+      if (path.equals(candidate)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** 从已编码的 query 中取值并解码（unquote 而非 unquote_plus）。 */
+  private static String extractQueryValue(String query, String name) {
+    for (String part : query.split("&")) {
+      if (part.isEmpty()) {
+        continue;
+      }
+      int separator = part.indexOf('=');
+      String key = separator >= 0 ? part.substring(0, separator) : part;
+      if (name.equals(WebSignGenerator.unquote(key))) {
+        String value = separator >= 0 ? part.substring(separator + 1) : "";
+        return WebSignGenerator.unquote(value);
+      }
+    }
+    return "";
   }
 
   private String encodeQueryParams(Map<String, String> params) {
@@ -747,18 +824,34 @@ public final class DouyinDownloader {
         sb.append("&");
       }
       first = false;
-      sb.append(urlEncode(entry.getKey())).append("=").append(urlEncode(entry.getValue()));
+      sb.append(quotePlus(entry.getKey())).append("=").append(quotePlus(entry.getValue()));
     }
     return sb.toString();
   }
 
-  private Optional<String> generateABogus(String encodedQuery) {
-    try {
-      String value = aBogusGenerator.getValue(encodedQuery, "GET");
-      return value.trim().isEmpty() ? Optional.empty() : Optional.of(value);
-    } catch (Exception ignored) {
-      return Optional.empty();
+  private static String quotePlus(String value) {
+    String input = value == null ? "" : value;
+    StringBuilder builder = new StringBuilder(input.length());
+    byte[] encoded = input.getBytes(StandardCharsets.UTF_8);
+    for (byte item : encoded) {
+      int unsigned = item & 0xFF;
+      if ((unsigned >= 'a' && unsigned <= 'z')
+          || (unsigned >= 'A' && unsigned <= 'Z')
+          || (unsigned >= '0' && unsigned <= '9')
+          || unsigned == '_'
+          || unsigned == '.'
+          || unsigned == '-'
+          || unsigned == '~') {
+        builder.append((char) unsigned);
+      } else if (unsigned == ' ') {
+        builder.append('+');
+      } else {
+        builder.append('%');
+        builder.append(Character.toUpperCase(Character.forDigit((unsigned >> 4) & 0xF, 16)));
+        builder.append(Character.toUpperCase(Character.forDigit(unsigned & 0xF, 16)));
+      }
     }
+    return builder.toString();
   }
 
   private String extractCookieValue(String cookie, String name) {
