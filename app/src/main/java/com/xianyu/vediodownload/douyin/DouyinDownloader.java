@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xianyu.vediodownload.douyin.exception.AwemeDetailFetchException;
 import com.xianyu.vediodownload.douyin.exception.DouyinDownloaderException;
+import com.xianyu.vediodownload.douyin.exception.FailReason;
 import com.xianyu.vediodownload.douyin.exception.FileDownloadException;
 import com.xianyu.vediodownload.douyin.exception.WorkListFetchException;
 import java.io.IOException;
@@ -289,7 +290,8 @@ public final class DouyinDownloader {
     return new SingleAwemeContext(resolved.normalizedCookie, awemeId, aweme);
   }
 
-  private ResolvedShareLink resolveShareLink(String shareLink, String cookie) {
+  private ResolvedShareLink resolveShareLink(String shareLink, String cookie)
+      throws DouyinDownloaderException {
     String normalizedCookie = normalizeCookie(cookie);
     Optional<String> extractedUrl = extractFirstUrl(shareLink);
     if (extractedUrl.isPresent() && !isTrustedShareUrl(extractedUrl.get())) {
@@ -544,7 +546,15 @@ public final class DouyinDownloader {
 
   private JsonNode fetchPagedAwemeList(List<String> apiUrls, String cookie, String listType)
       throws WorkListFetchException {
+    // 请求前校验 Cookie 关键字段（作者列表同样依赖 uifid/ttwid）。
+    CookieIssue cookieIssue = checkCookieCompleteness(cookie);
+    if (cookieIssue != CookieIssue.OK) {
+      throw new WorkListFetchException(
+          "Cookie missing required field: " + cookieIssue, FailReason.COOKIE_MISSING);
+    }
+
     List<String> attempts = new ArrayList<>();
+    FailReason reason = FailReason.UNKNOWN;
 
     for (String apiUrl : apiUrls) {
       try {
@@ -559,6 +569,7 @@ public final class DouyinDownloader {
           String body = bodyObj != null ? bodyObj.string() : "";
           body = body.trim();
           if (body.isEmpty()) {
+            reason = pickMoreSpecific(reason, FailReason.RISK_CONTROL);
             attempts.add("HTTP=" + response.code() + ", URL=" + apiUrl + ", BODY=<empty>");
             continue;
           }
@@ -567,9 +578,11 @@ public final class DouyinDownloader {
           if (root.isObject()) {
             return root;
           }
+          reason = pickMoreSpecific(reason, classifyDetailFailure(response.code(), body));
           attempts.add("HTTP=" + response.code() + ", URL=" + apiUrl + ", BODY=" + shortBody(body));
         }
       } catch (IOException | RuntimeException e) {
+        reason = pickMoreSpecific(reason, FailReason.NETWORK);
         attempts.add(
             "ERR="
                 + e.getClass().getSimpleName()
@@ -586,10 +599,11 @@ public final class DouyinDownloader {
             + " work list. Tried "
             + apiUrls.size()
             + " endpoints. "
-            + String.join(" | ", attempts));
+            + String.join(" | ", attempts),
+        reason);
   }
 
-  private String resolveFinalUrl(String url, String cookie) {
+  private String resolveFinalUrl(String url, String cookie) throws DouyinDownloaderException {
     Request request;
     try {
       request =
@@ -604,12 +618,24 @@ public final class DouyinDownloader {
     try (Response response = httpClient.newCall(request).execute()) {
       return response.request().url().toString();
     } catch (IOException e) {
-      return url;
+      // 短链重定向失败（通常是网络不可达）：原样返回 url 会掩盖网络问题，
+      // 后续提取不到 aweme_id 会被误判为「链接格式不正确」。这里显式抛出网络异常。
+      throw new AwemeDetailFetchException(
+          "Network error while resolving share link: " + e.getMessage(),
+          FailReason.NETWORK);
     }
   }
 
   private JsonNode fetchAwemeDetail(String awemeId, String cookie)
       throws AwemeDetailFetchException {
+    // 请求前先校验 Cookie 关键字段：缺失时直接报 COOKIE_MISSING，避免发起注定
+    // 被 403 拒绝的请求（缺 uifid/ttwid 会被 Argus 拦截，容易被误判为风控）。
+    CookieIssue cookieIssue = checkCookieCompleteness(cookie);
+    if (cookieIssue != CookieIssue.OK) {
+      throw new AwemeDetailFetchException(
+          "Cookie missing required field: " + cookieIssue, FailReason.COOKIE_MISSING);
+    }
+
     String detailQuery = buildWebDetailQuery(awemeId, cookie);
     List<String> candidates =
         Arrays.asList(
@@ -618,6 +644,7 @@ public final class DouyinDownloader {
             "https://www.iesdouyin.com/aweme/v1/web/aweme/detail/?" + detailQuery);
 
     List<String> attempts = new ArrayList<>();
+    FailReason reason = FailReason.UNKNOWN;
     for (String apiUrl : candidates) {
       try {
         android.util.Log.d("DouyinDownloader", "fetchAwemeDetail try: " + apiUrl);
@@ -633,6 +660,8 @@ public final class DouyinDownloader {
           String body = bodyObj != null ? bodyObj.string() : "";
           body = body.trim();
           android.util.Log.d("DouyinDownloader", "  -> HTTP " + code + ", body length=" + body.length());
+          // 完整打印 body，便于定位风控/签名/作品不存在的真实响应结构
+          android.util.Log.d("DouyinDownloader", "  -> BODY=" + (body.length() > 2000 ? body.substring(0, 2000) : body));
 
           Optional<JsonNode> aweme = parseAwemeNode(body);
           if (aweme.isPresent()) {
@@ -640,10 +669,14 @@ public final class DouyinDownloader {
             return aweme.get();
           }
 
+          // 根据本轮 HTTP code + body 更新失败原因（取更具体的一档）
+          reason = pickMoreSpecific(reason, classifyDetailFailure(code, body));
           attempts.add("HTTP=" + code + ", URL=" + apiUrl + ", BODY=" + shortBody(body));
         }
       } catch (IOException | RuntimeException e) {
         android.util.Log.e("DouyinDownloader", "  -> exception: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+        // 网络层异常优先判定为 NETWORK，除非已有更具体的风控/签名结论
+        reason = pickMoreSpecific(reason, FailReason.NETWORK);
         attempts.add(
             "ERR="
                 + e.getClass().getSimpleName()
@@ -661,7 +694,137 @@ public final class DouyinDownloader {
             + candidates.size()
             + " endpoints. "
             + String.join(" | ", attempts)
-            + ". Suggestion: ensure Cookie is injected and include signature chain (a_bogus/msToken/uifid).");
+            + ". Suggestion: ensure Cookie is injected and include signature chain (a_bogus/msToken/uifid).",
+        reason);
+  }
+
+  /**
+   * 根据单次请求的 HTTP 状态码与响应体内容判定失败原因。
+   *
+   * <p>判定规则对齐抖音 Argus 风控的实际行为（参考社区实测）：
+   * <ol>
+   *   <li>签名/参数拒绝：body 含 "uifid not found" / "signature not found" /
+   *       "sign invalid" / "sign expired" / "blocked by argus" —— 这是签名或
+   *       uifid 缺失，归为 SIGNATURE_INVALID（可操作提示是检查 uifid / 更新算法）。</li>
+   *   <li>风控挑战：body 含 verify_center / captcha / secsdk / byted_acrawler /
+   *       slide_verify —— 归为 RISK_CONTROL。</li>
+   *   <li>作品不可用：body 含 filter_reason（core_dep=已删除、status_self_see=私密）
+   *       或 not exist / not found —— 归为 WORK_NOT_FOUND。</li>
+   * </ol>
+   * 注意：403 状态码语义过宽（签名拒绝、风控、作品删除都可能 403），
+   * 因此不单独依据 403 判定，必须结合 body 内容。
+   */
+  private static FailReason classifyDetailFailure(int code, String body) {
+    String lower = body == null ? "" : body.toLowerCase();
+
+    // 1. 签名 / 参数拒绝（优先级最高，最可操作）
+    if (lower.contains("uifid not found")
+        || lower.contains("signature not found")
+        || lower.contains("sign invalid")
+        || lower.contains("sign expired")
+        || lower.contains("blocked by argus")
+        || lower.contains("invalid signature")) {
+      return FailReason.SIGNATURE_INVALID;
+    }
+
+    // 2. 风控挑战（验证码 / 滑动验证 / acrawler）
+    if (lower.contains("verify_center")
+        || lower.contains("verify_page")
+        || lower.contains("captcha")
+        || lower.contains("secsdk")
+        || lower.contains("byted_acrawler")
+        || lower.contains("slide_verify")) {
+      return FailReason.RISK_CONTROL;
+    }
+
+    // 3. 作品不可用（filter_detail 里 filter_reason 或明确 not found）
+    if (lower.contains("filter_reason")
+        || lower.contains("core_dep")
+        || lower.contains("status_self_see")
+        || lower.contains("not exist")
+        || lower.contains("not found")
+        || lower.contains("已删除")
+        || lower.contains("private")
+        || lower.contains("私密")) {
+      return FailReason.WORK_NOT_FOUND;
+    }
+
+    // 4. 纯 403/412 且 body 无法识别：更可能是风控拦截（无 body 的裸拒绝）
+    if (code == 403 || code == 412 || code == 407 || code == 429) {
+      return FailReason.RISK_CONTROL;
+    }
+
+    return FailReason.UNKNOWN;
+  }
+
+  /** 从两个候选原因中取更具体（更具可操作性）的一个。 */
+  private static FailReason pickMoreSpecific(FailReason current, FailReason candidate) {
+    if (candidate == null || candidate == FailReason.UNKNOWN) {
+      return current;
+    }
+    if (current == null || current == FailReason.UNKNOWN) {
+      return candidate;
+    }
+    // 取优先级更高者。关键：确定性结论（作品不存在，有 filter_reason 背书）
+    // 必须高于模糊信号（403 blocked，可能是风控也可能是备用域名拦截）。
+    return priority(candidate) >= priority(current) ? candidate : current;
+  }
+
+  private static int priority(FailReason r) {
+    switch (r) {
+      // 作品不存在：body 有明确的 filter_reason=status_self_see/core_dep，是最确定结论
+      case WORK_NOT_FOUND:
+        return 6;
+      // 签名失效：body 有明确的 sign invalid / uifid not found
+      case SIGNATURE_INVALID:
+        return 5;
+      // Cookie 缺失：请求前校验，确定性高
+      case COOKIE_MISSING:
+        return 5;
+      // 风控：403 blocked 等模糊信号，可能只是备用域名拦截，优先级最低的可操作结论
+      case RISK_CONTROL:
+        return 4;
+      case NETWORK:
+        return 2;
+      default:
+        return 1;
+    }
+  }
+
+  /** Cookie 关键字段的缺失情况。 */
+  private enum CookieIssue {
+    OK,
+    EMPTY,
+    MISSING_SESSIONID,
+    MISSING_UIFID,
+    MISSING_TTWID,
+  }
+
+  /**
+   * 判断 Cookie 是否包含解析所需的关键字段（sessionid / uifid / ttwid）。
+   * 返回缺失的具体字段，全部齐全返回 {@link CookieIssue#OK}。
+   */
+  private CookieIssue checkCookieCompleteness(String cookie) {
+    if (cookie == null || cookie.trim().isEmpty()) {
+      return CookieIssue.EMPTY;
+    }
+    boolean hasUifid =
+        extractCookieValue(cookie, "uifid") != null || extractCookieValue(cookie, "UIFID") != null;
+    boolean hasSession =
+        extractCookieValue(cookie, "sessionid") != null
+            || extractCookieValue(cookie, "sessionid_ss") != null;
+    boolean hasTtwid = extractCookieValue(cookie, "ttwid") != null;
+
+    if (!hasSession) {
+      return CookieIssue.MISSING_SESSIONID;
+    }
+    if (!hasUifid) {
+      return CookieIssue.MISSING_UIFID;
+    }
+    if (!hasTtwid) {
+      return CookieIssue.MISSING_TTWID;
+    }
+    return CookieIssue.OK;
   }
 
   private Optional<JsonNode> parseAwemeNode(String body) {

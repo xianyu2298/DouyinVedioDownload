@@ -150,6 +150,7 @@ private fun SettingsHomeContent(
     val cookieManager = remember(context) { CookieManager(context) }
     val coroutineScope = rememberCoroutineScope()
     var showCookieDialog by remember { mutableStateOf(false) }
+    var showCheckCookieDialog by remember { mutableStateOf(false) }
 
     // 缓存相关状态
     var appCacheBytes by remember { mutableStateOf(0L) }
@@ -220,6 +221,14 @@ private fun SettingsHomeContent(
             NeumorphicButton(
                 text = stringResource(R.string.btn_set_cookie),
                 onClick = { showCookieDialog = true },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            NeumorphicButton(
+                text = stringResource(R.string.btn_check_cookie),
+                onClick = { showCheckCookieDialog = true },
                 modifier = Modifier.fillMaxWidth()
             )
         }
@@ -416,6 +425,13 @@ private fun SettingsHomeContent(
         )
     }
 
+    if (showCheckCookieDialog) {
+        CookieCheckDialog(
+            cookieManager = cookieManager,
+            onDismiss = { showCheckCookieDialog = false }
+        )
+    }
+
     if (showClearCacheDialog) {
         ClearCacheDialog(
             appCacheBytes = appCacheBytes,
@@ -509,6 +525,113 @@ private fun CookieDialog(
                         context.getString(R.string.cookie_status_empty),
                         Toast.LENGTH_SHORT
                     ).show()
+                }) {
+                    Text(text = stringResource(R.string.cookie_dialog_clear))
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+                TextButton(onClick = onDismiss) {
+                    Text(text = stringResource(R.string.cookie_dialog_cancel))
+                }
+            }
+        }
+    )
+}
+
+@Composable
+private fun CookieCheckDialog(
+    cookieManager: CookieManager,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    var cookieInput by remember { mutableStateOf(cookieManager.getCookie()) }
+    var checkResult by remember { mutableStateOf<CookieManager.CookieCheckResult?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(text = stringResource(R.string.cookie_check_dialog_title))
+        },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = cookieInput,
+                    onValueChange = { cookieInput = it },
+                    label = { Text(text = stringResource(R.string.cookie_check_hint)) },
+                    placeholder = { Text(text = stringResource(R.string.cookie_check_hint)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 96.dp),
+                    singleLine = false,
+                    maxLines = 6
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = stringResource(R.string.cookie_check_help),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                // 检查结果
+                checkResult?.let { result ->
+                    Spacer(modifier = Modifier.height(12.dp))
+                    if (result.empty) {
+                        Text(
+                            text = stringResource(R.string.cookie_check_result_empty),
+                            fontSize = 13.sp,
+                            color = Color(0xFFE53935)
+                        )
+                    } else if (result.complete) {
+                        Text(
+                            text = stringResource(R.string.cookie_check_result_ok),
+                            fontSize = 13.sp,
+                            color = Color(0xFF2E7D32)
+                        )
+                    } else {
+                        Column {
+                            Text(
+                                text = stringResource(R.string.cookie_check_result_incomplete),
+                                fontSize = 13.sp,
+                                color = Color(0xFFE53935)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            if (!result.hasUifid) {
+                                Text(
+                                    text = "• " + stringResource(R.string.cookie_check_field_uifid),
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (!result.hasSession) {
+                                Text(
+                                    text = "• " + stringResource(R.string.cookie_check_field_sessionid),
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (!result.hasTtwid) {
+                                Text(
+                                    text = "• " + stringResource(R.string.cookie_check_field_ttwid),
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                checkResult = CookieManager.checkCookie(cookieInput.trim())
+            }) {
+                Text(text = stringResource(R.string.cache_confirm))
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = {
+                    cookieInput = ""
+                    checkResult = null
                 }) {
                     Text(text = stringResource(R.string.cookie_dialog_clear))
                 }

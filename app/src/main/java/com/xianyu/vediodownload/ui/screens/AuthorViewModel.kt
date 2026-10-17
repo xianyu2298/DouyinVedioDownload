@@ -267,14 +267,14 @@ class AuthorViewModel(application: Application) : AndroidViewModel(application) 
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        error = "无法获取作者作品列表，可能已设为私密或地区不可访问"
+                        error = resolveErrorMessage(e, forWorkList = true)
                     )
                 }
             } catch (e: AwemeDetailFetchException) {
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        error = "无法解析该作品，可能已删除、设为私密或地区不可访问"
+                        error = resolveErrorMessage(e, forWorkList = false)
                     )
                 }
             } catch (e: IllegalArgumentException) {

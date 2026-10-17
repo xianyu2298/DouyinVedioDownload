@@ -33,6 +33,20 @@
     <string name="cookie_status_set">Cookie已设置</string>
     <string name="cookie_status_empty">你还未设置Cookie</string>
 
+    <!-- Cookie 检查 -->
+    <string name="btn_check_cookie">Cookie检查</string>
+    <string name="cookie_check_dialog_title">检查抖音Cookie</string>
+    <string name="cookie_check_hint">粘贴抖音Web端登录后的Cookie</string>
+    <string name="cookie_check_help">将检查 Cookie 是否包含解析所需的完整字段（sessionid / uifid / ttwid），缺失会导致解析失败。msToken 为动态 token，缺失属正常现象。</string>
+    <string name="cookie_check_result_empty">未检测到 Cookie，请先登录抖音并获取 Cookie</string>
+    <string name="cookie_check_result_ok">Cookie 字段完整，可以正常解析</string>
+    <string name="cookie_check_result_incomplete">Cookie 不完整，缺少以下字段：</string>
+    <string name="cookie_check_field_mstoken">msToken（签名必需）</string>
+    <string name="cookie_check_field_uifid">uifid（风控校验必需）</string>
+    <string name="cookie_check_field_sessionid">sessionid（登录态）</string>
+    <string name="cookie_check_field_ttwid">ttwid（设备标识）</string>
+    <string name="cookie_check_field_uidtt">uid_tt（账号标识）</string>
+
     <!-- 分区标题 -->
     <string name="section_video">视频下载</string>
     <string name="section_images">图集下载</string>

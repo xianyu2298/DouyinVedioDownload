@@ -235,14 +235,14 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        error = "无法解析该作品，可能已删除、设为私密或所在地区不可访问"
+                        error = resolveErrorMessage(e, forWorkList = false)
                     )
                 }
             } catch (e: WorkListFetchException) {
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        error = "无法获取作品列表，请稍后重试"
+                        error = resolveErrorMessage(e, forWorkList = true)
                     )
                 }
             } catch (e: IllegalArgumentException) {
