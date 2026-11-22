@@ -26,6 +26,12 @@ fun resolveErrorMessage(e: DouyinDownloaderException, forWorkList: Boolean): Str
         FailReason.WORK_NOT_FOUND ->
             if (forWorkList) "该作者暂无作品或作品不可见" else "该作品可能已删除、设为私密或所在地区不可访问"
 
+        FailReason.NO_LINK_FOUND ->
+            "没有识别到可用的分享链接，请复制完整的分享文案（含作品链接）后重试"
+
+        FailReason.LINK_INCOMPLETE ->
+            "链接无法解析，可能被换行截断或已失效，请回到 App 重新复制一次分享文案"
+
         FailReason.UNKNOWN ->
             if (forWorkList) "无法获取作品列表，请稍后重试" else "无法解析该作品，请稍后重试"
     }

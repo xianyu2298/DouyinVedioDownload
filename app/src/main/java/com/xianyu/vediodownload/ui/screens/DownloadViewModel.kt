@@ -3,6 +3,7 @@ package com.xianyu.vediodownload.ui.screens
 import android.app.Application
 import android.content.ContentValues
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
@@ -25,7 +26,6 @@ import com.xianyu.vediodownload.util.DownloaderBridge
 import com.xianyu.vediodownload.util.ForegroundDownloadNotifier
 import com.xianyu.vediodownload.util.LivePhotoMaker
 import com.xianyu.vediodownload.util.PlatformModeManager
-import com.xianyu.vediodownload.util.looksLikeDouyinShareLink
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +36,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class DownloadViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
@@ -115,6 +118,8 @@ data class DownloadUiState(
     val isLoading: Boolean = false,
     val loadingMessage: String = "正在解析...",
     val error: String? = null,
+    /** 解析失败时的诊断文本，供用户一键复制反馈（不含 Cookie / 账号信息）。 */
+    val diagnostics: String? = null,
     val preview: MediaPreview? = null,
     val isVideo: Boolean = false,
     val isImage: Boolean = false,
@@ -171,6 +176,7 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                 url = "",
                 preview = null,
                 error = null,
+                diagnostics = null,
                 isLoading = false,
                 loadingMessage = "正在解析...",
                 isVideo = false,
@@ -192,32 +198,37 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
 
         val mode = PlatformModeManager(getApplication()).getMode()
         val kuaishouMode = mode == Platform.KUAISHOU
+        val detectedLinks = runCatching { DouyinDownloader.describeLinks(url) }
+            .getOrDefault(emptyList())
 
         if (kuaishouMode) {
-            // 快手模式：只接受快手链接。链接与模式不匹配时明确提示，不做静默自动切换。
-            if (!KuaishouDownloader.containsKuaishouLink(url)) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = "当前为快手模式，请粘贴快手分享链接；如需解析抖音链接，请到设置页切换为抖音模式"
-                    )
+            val hasKuaishouLink = detectedLinks.any { KuaishouDownloader.isTrustedShareUrl(it) } ||
+                KuaishouDownloader.containsKuaishouLink(url)
+            if (!hasKuaishouLink) {
+                val message = if (detectedLinks.any { DouyinDownloader.isTrustedShareUrl(it) }) {
+                    "当前为快手模式，你粘贴的是抖音链接，请到设置页切换为抖音模式"
+                } else {
+                    "没有识别到快手链接，请复制完整的分享文案（含作品链接）后重试"
                 }
+                failParse(message, url, mode, null)
                 return
             }
         } else {
-            // 抖音模式：预校验 + Cookie 校验，避免发起注定失败的请求
-            if (!looksLikeDouyinShareLink(url)) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = "链接格式不正确，请粘贴完整的抖音分享文案或链接"
-                    )
+            val hasDouyinLink = detectedLinks.any { DouyinDownloader.isTrustedShareUrl(it) } ||
+                looksLikeDouyinDomainOnly(url)
+            if (!hasDouyinLink) {
+                // 反向的跨平台提示：抖音模式下粘贴了快手链接
+                val message = if (KuaishouDownloader.containsKuaishouLink(url)) {
+                    "当前为抖音模式，你粘贴的是快手链接，请到设置页切换为快手模式"
+                } else {
+                    "没有识别到抖音链接，请复制完整的分享文案（含 v.douyin.com 链接）后重试"
                 }
+                failParse(message, url, mode, null)
                 return
             }
             if (!cookieManager.isSet()) {
                 _uiState.update {
-                    it.copy(isLoading = false, error = "请先在设置页设置抖音 Cookie")
+                    it.copy(isLoading = false, error = "请先在设置页设置抖音 Cookie", diagnostics = null)
                 }
                 return
             }
@@ -228,6 +239,7 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                 isLoading = true,
                 loadingMessage = if (kuaishouMode) "正在解析快手作品..." else "正在解析...",
                 error = null,
+                diagnostics = null,
                 preview = null,
             )
         }
@@ -290,54 +302,81 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                     )
                 }
             } catch (e: AwemeDetailFetchException) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = resolveErrorMessage(e, forWorkList = false)
-                    )
-                }
+                failParse(resolveErrorMessage(e, forWorkList = false), url, mode, e)
             } catch (e: WorkListFetchException) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = resolveErrorMessage(e, forWorkList = true)
-                    )
-                }
+                failParse(resolveErrorMessage(e, forWorkList = true), url, mode, e)
             } catch (e: FileDownloadException) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = "作品数据缺失，请换个链接重试"
-                    )
-                }
+                failParse("作品数据缺失，请换个链接重试", url, mode, e)
             } catch (e: DouyinDownloaderException) {
                 // 快手解析器复用同一套异常体系（含 FailReason），因此统一按 reason 映射文案
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = resolveErrorMessage(e, forWorkList = false)
-                    )
-                }
+                failParse(resolveErrorMessage(e, forWorkList = false), url, mode, e)
             } catch (e: IllegalArgumentException) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = if (kuaishouMode) {
-                            "快手链接格式不正确，请粘贴完整的分享文案或链接"
-                        } else {
-                            "链接格式不正确，请粘贴完整的抖音分享文案或链接"
-                        }
-                    )
-                }
+                failParse(
+                    if (kuaishouMode) {
+                        "链接无法识别，请复制完整的快手分享文案后重试"
+                    } else {
+                        "链接无法识别，请复制完整的抖音分享文案后重试"
+                    },
+                    url,
+                    mode,
+                    e
+                )
             } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = "解析失败，请检查网络后重试"
-                    )
-                }
+                failParse("解析失败，请检查网络后重试", url, mode, e)
             }
         }
+    }
+
+    /** 统一的失败出口：写错误文案，同时生成可一键复制的诊断文本。 */
+    private fun failParse(message: String, rawText: String, mode: Platform, cause: Throwable?) {
+        _uiState.update {
+            it.copy(
+                isLoading = false,
+                error = message,
+                diagnostics = buildDiagnostics(rawText, mode, cause),
+            )
+        }
+    }
+
+    /**
+     * 生成诊断文本。
+     *
+     * <p>用户不会抓 Logcat，这段文本是他唯一能低成本提供的现场信息：
+     * 版本号排除老包、模式排除跨平台误报、原文与识别到的链接能看出字符是否被改形。
+     * 不含 Cookie、不含账号信息。
+     */
+    private fun buildDiagnostics(rawText: String, mode: Platform, cause: Throwable?): String {
+        val app = getApplication<Application>()
+        val pkg = runCatching {
+            app.packageManager.getPackageInfo(app.packageName, 0)
+        }.getOrNull()
+        val versionName = pkg?.versionName ?: "?"
+        val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            pkg?.longVersionCode ?: 0L
+        } else {
+            @Suppress("DEPRECATION")
+            (pkg?.versionCode ?: 0).toLong()
+        }
+        val links = runCatching { DouyinDownloader.describeLinks(rawText) }
+            .getOrDefault(emptyList())
+        val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+        return buildString {
+            appendLine("【抖净诊断】")
+            appendLine("版本: $versionName ($versionCode)")
+            appendLine("模式: ${if (mode == Platform.KUAISHOU) "快手" else "抖音"}")
+            appendLine("时间: $time")
+            appendLine("原文: " + rawText.take(200).replace("\n", " ⏎ "))
+            appendLine("识别到的链接: " + if (links.isEmpty()) "无" else links.joinToString(" , "))
+            if (cause != null) {
+                appendLine("异常: ${cause.javaClass.simpleName}: ${cause.message}")
+            }
+        }
+    }
+
+    /** 只判断域名、不要求带 scheme：兼容用户手输 "v.douyin.com/xxx" 的情况。 */
+    private fun looksLikeDouyinDomainOnly(text: String): Boolean {
+        val lower = text.lowercase()
+        return lower.contains("douyin.com") || lower.contains("iesdouyin.com")
     }
 
     fun downloadVideo() {

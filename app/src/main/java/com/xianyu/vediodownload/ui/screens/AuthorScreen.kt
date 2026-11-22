@@ -290,9 +290,7 @@ private fun AuthorInputContent(
         // 错误
         uiState.error?.let { error ->
             Spacer(modifier = Modifier.height(12.dp))
-            GlassCard(modifier = Modifier.fillMaxWidth()) {
-                Text(text = error, fontSize = 14.sp, color = Color(0xFFEF4444))
-            }
+            ErrorMessageCard(message = error, diagnostics = uiState.diagnostics)
         }
 
         Spacer(modifier = Modifier.height(24.dp))

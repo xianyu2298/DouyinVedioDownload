@@ -27,6 +27,8 @@
 | 报错判定优先级 | 「作品不存在」必须高于「风控」。私密作品案例：端点2 返 `status_self_see`、端点3 返 `403 blocked`，若风控优先会误报。见 `FailReason` 优先级表。 |
 | msToken 不是必需 | 它是动态 token，正常登录 Cookie 里本来就没有。Cookie 必需字段只有 `sessionid` + `uifid` + `ttwid`。 |
 | URL 正则不能用黑名单 | 必须用 RFC 3986 白名单，否则汉字 / emoji / 全角 / 零宽字符会被吞进 URL，误报「链接格式不正确」。 |
+| 不能只取第一个 URL | 分享文案里可能混入其他链接（剪贴板残留），必须扫描所有 URL 取第一个域名匹配的。 |
+| 特殊字符先归一化 | 输入法/转发会把 `//` 变全角、塞入零宽字符；`LinkTextNormalizer` 必须先跑，再做正则匹配。 |
 | 签名 UA 必须一致 | `DEFAULT_USER_AGENT`、`buildCommonWebParams` 的 browser_version、`ABogusGenerator` 的 UA 三者必须完全一致，否则签名校验失败。 |
 
 ### 0.4 签名失效时的处置
@@ -668,6 +670,32 @@ fetchAwemeDetail try: ...
 
 抖音对单 IP 频繁请求会触发风控，批量下载可能不全。当前用 800ms 间隔缓解，但仍可能被限流。
 
+### 15.5 「链接格式不正确」怎么定位
+
+用户不会抓 Logcat，因此错误卡片带「复制诊断信息」按钮，点一下得到：
+
+```
+【抖净诊断】
+版本: 1.5 (7)
+模式: 抖音
+时间: 2026-11-22 16:20:31
+原文: 4.15 复制打开抖音，看看【小哥胡修车的作品】…
+识别到的链接: https://v.douyin.com/HVp0RJfSN34/
+异常: AwemeDetailFetchException: no douyin link found, urls=[]
+```
+
+判定方法：
+
+| 现象 | 结论 |
+|------|------|
+| `识别到的链接` 为空 | 文本里确实没有可识别链接，或被改形（对比原文是否有全角/换行/零宽） |
+| `识别到的链接` 是别的平台域名 | 用户在错误的解析模式下粘贴（看「模式」那一行） |
+| 链接正常但 `异常` 是 `NO_LINK_FOUND` | 域名不在白名单（可能是陌生短链域名，需补白名单） |
+| `异常` 是 `LINK_INCOMPLETE` | 看 `status` / `bodyLen`：`status=200` + `bodyLen>0` = 短链未 302 返回了落地页（已由兜底逻辑处理）；`final` 与输入相同也说明没发生重定向 |
+| 版本为 1.4 及更早 | 老包没有今天的归一化/多 URL 修复，先升级再判定 |
+
+> 只在诊断需要时读取 `describeLinks()`，不要把它当作解析入口——正式解析仍走 `resolveShareLink`。
+
 ---
 
 ## 16. 后续迭代建议
@@ -693,6 +721,52 @@ fetchAwemeDetail try: ...
 ---
 
 ## 17. 变更记录
+
+### 2026-11-22（补 6）：短链不 302 的兜底
+
+**现场证据**（用户 v1.5 诊断）：`resolved=https://v.douyin.com/QYXvVGm5Zxs/`，即**最终地址与输入完全相同**，说明 302 根本没发生。同一链接在本机用 curl / JVM 请求均正常 302 到 `www.iesdouyin.com/share/video/7708635826690788618/`。结论：部分网络环境下短链服务返回 200 落地页而非 302。
+
+| 改动 | 说明 |
+|------|------|
+| `probeShortLink(url, cookie, mobile, captureBody)` | 取代原 `resolveFinalUrl`，返回最终地址 + 状态码 + 正文片段（HTML 最多 200KB） |
+| 落地页兜底 | 最终地址取不到 ID 时，从正文提取：`share/video/{id}` → `modal_id` → `aweme_id` → `item_ids` → 唯一的 `video/{id}` |
+| 二次尝试 | 仍失败则换**移动端 UA 且不带 Cookie** 重试一次（短链服务对桌面/登录态请求更容易返回落地页） |
+| 失败信息增强 | 异常里带上 `status` / `final` / `bodyLen`，下次诊断直接可判 |
+| 取消静默吞异常 | 原 `catch (Exception ignored) { return url; }` 会把「请求构造失败」伪装成「解析不出 ID」，现改为明确报错 |
+
+**避免下错视频**：通用 `video/{id}` 仅在页面内**唯一**时才采用；出现多个（推荐列表）直接判失败，宁可报错也不下载错的作品。
+
+**验证**：用户失败链接 + 两条历史样本均正常进入 API 阶段；HTML 提取用例（`video/`、`modal_id":"`、无 ID 页面）全部符合预期。
+
+### 2026-11-22（补 5）：链接解析健壮性 + 一键诊断
+
+**背景**：用户反馈「我解析正常，别人报链接格式不正确」。用 JVM 直调解析器复现后确认三个根因：只取文本中第一个 URL、特殊字符（全角/零宽）切断 URL、跨平台链接落到同一句错误文案。
+
+| 文件 | 改动 |
+|------|------|
+| `util/LinkTextNormalizer.java`（新增） | 全角 ASCII → 半角、去零宽字符（U+200B/200C/200D/FEFF）、全角空格转普通空格 |
+| `DouyinDownloader.java` | `resolveShareLink` 改为**扫描所有 URL 取第一个域名匹配的**；无 scheme 时从域名处向左扩展子域名再补 https；新增 `describeLinks()` 供诊断；链接类失败改抛 `NO_LINK_FOUND` / `LINK_INCOMPLETE` |
+| `KuaishouDownloader.java` | 同上；页面无 `INIT_STATE` 判 `RISK_CONTROL`，有 `INIT_STATE` 无 `photo` 才判 `WORK_NOT_FOUND` |
+| `FailReason.java` | 新增 `NO_LINK_FOUND`、`LINK_INCOMPLETE` |
+| `ErrorMessages.kt` | 两类新原因对应针对性文案，不再一律「格式不正确」 |
+| `ErrorMessageCard.kt`（新增） | 统一错误卡片 + 「复制诊断信息」入口（写剪贴板 + Toast） |
+| `DownloadViewModel` / `AuthorViewModel` | 状态增 `diagnostics`；失败统一走 `failParse` / `failAuthor` 生成诊断文本 |
+| 5 个页面 | 错误卡替换为 `ErrorMessageCard` |
+
+**诊断文本内容**：版本号、当前模式、时间、原文前 200 字、正则识别到的链接、异常类与 message。不含 Cookie / 账号信息。用户点一下就能粘贴发给开发者，替代 Logcat。
+
+**回归结果**（JVM 直调真实编译产物，9 个用例全过）：
+
+```
+用户样本 T1 / T2            → 通过链接阶段（仅缺 Cookie）
+剪贴板混入其他链接           → 取到抖音链接 ✓
+全角斜杠 https:／／          → 归一化后识别 ✓
+链接中插入零宽字符           → 归一化后识别 ✓
+无 scheme（v.douyin.com/x）  → 补全并识别 ✓（修复子域名被截断）
+抖音模式贴快手链接           → NO_LINK_FOUND
+快手模式贴抖音链接           → NO_LINK_FOUND
+无效短链                    → LINK_INCOMPLETE
+```
 
 ### 2026-11-22（补 4）：Gitee 检查更新
 
@@ -986,6 +1060,9 @@ GET https://gitee.com/api/v5/repos/jbl2003/DouyinVedioDownload/releases/latest
 | 更新弹窗 | ui/screens/UpdateDialog.kt | `UpdateDialog()` |
 | 解析单个作品 | DouyinDownloader.java | `collectWorkInfo()` |
 | 抖音清晰度标注 | DouyinDownloader.java | `buildVideoQualityLabel()` |
+| 分享文本归一化 | util/LinkTextNormalizer.java | `normalize(text)` |
+| 链接识别（诊断用） | DouyinDownloader.java | `describeLinks(text)` |
+| 错误卡片 + 复制诊断 | ui/screens/ErrorMessageCard.kt | `ErrorMessageCard(message, diagnostics)` |
 | 解析作者作品 | DouyinDownloader.java | `collectAccountWorksInfo()` |
 | a_bogus 签名 | ABogusGenerator.java | `getValue(query)` |
 | WebSign 签名 | WebSignGenerator.java | `sign(query, uifid, ts)` |

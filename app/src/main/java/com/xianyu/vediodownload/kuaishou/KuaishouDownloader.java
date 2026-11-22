@@ -6,11 +6,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xianyu.vediodownload.douyin.AwemeProfile;
 import com.xianyu.vediodownload.douyin.DouyinDownloader;
+import com.xianyu.vediodownload.douyin.exception.AwemeDetailFetchException;
 import com.xianyu.vediodownload.douyin.exception.DouyinDownloaderException;
 import com.xianyu.vediodownload.douyin.exception.FailReason;
+import com.xianyu.vediodownload.util.LinkTextNormalizer;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -108,12 +112,24 @@ public final class KuaishouDownloader {
       throw new IllegalArgumentException("shareLink is blank");
     }
 
-    String rawUrl = extractFirstUrl(shareLink).orElse(shareLink.trim());
-    if (!rawUrl.contains("://") && containsKuaishouLink(rawUrl)) {
-      rawUrl = "https://" + rawUrl;
+    String text = LinkTextNormalizer.normalize(shareLink);
+
+    // 扫描所有 URL，取第一个属于快手的：用户剪贴板里可能残留别的内容
+    List<String> urls = extractAllUrls(text);
+    String rawUrl = null;
+    for (String candidate : urls) {
+      if (isTrustedShareUrl(candidate)) {
+        rawUrl = candidate;
+        break;
+      }
     }
-    if (!isTrustedShareUrl(rawUrl)) {
-      throw new IllegalArgumentException("Unsupported share link host");
+    if (rawUrl == null) {
+      String bare = findBareKuaishouUrl(text);
+      if (bare.isEmpty()) {
+        throw new AwemeDetailFetchException(
+            "no kuaishou link found, urls=" + urls, FailReason.NO_LINK_FOUND);
+      }
+      rawUrl = "https://" + bare;
     }
 
     String photoId = extractPhotoId(rawUrl).orElse("");
@@ -121,7 +137,8 @@ public final class KuaishouDownloader {
       // 短链：跟随 302 拿到最终地址后再提取
       String resolved = resolveFinalUrl(rawUrl);
       if (!isTrustedShareUrl(resolved)) {
-        throw new IllegalArgumentException("Unsupported resolved share link host");
+        throw new AwemeDetailFetchException(
+            "resolved to untrusted host: " + resolved, FailReason.LINK_INCOMPLETE);
       }
       photoId = extractPhotoId(resolved).orElse("");
       if (photoId.isEmpty()) {
@@ -129,16 +146,19 @@ public final class KuaishouDownloader {
       }
     }
     if (photoId.isEmpty()) {
-      throw new IllegalArgumentException("Cannot extract kuaishou photo id from shareLink");
+      throw new AwemeDetailFetchException(
+          "cannot extract kuaishou photo id from " + rawUrl, FailReason.LINK_INCOMPLETE);
     }
 
     String html = fetchPage(DETAIL_PAGE + photoId);
     JsonNode photo = parsePhotoNode(html);
     if (photo == null) {
       Log.w(TAG, "photo node missing, html length=" + html.length());
+      // 页面里连 INIT_STATE 都没有，通常是风控/验证码页；有 INIT_STATE 但无 photo 才是作品不存在
+      boolean hasState = html.contains("window.INIT_STATE");
       throw new DouyinDownloaderException(
-          "kuaishou photo node not found (page might be a captcha or the work is gone)",
-          FailReason.WORK_NOT_FOUND);
+          "kuaishou photo node not found (hasInitState=" + hasState + ")",
+          hasState ? FailReason.WORK_NOT_FOUND : FailReason.RISK_CONTROL);
     }
 
     AwemeProfile profile = KuaishouPhotoParser.parse(photo, photoId);
@@ -295,13 +315,55 @@ public final class KuaishouDownloader {
     return Optional.empty();
   }
 
-  private static Optional<String> extractFirstUrl(String text) {
-    Matcher matcher = DouyinDownloader.URL_PATTERN.matcher(text);
-    if (!matcher.find()) {
-      return Optional.empty();
+  /** 提取文本中所有 URL（剥离尾部包裹标点）。 */
+  private static List<String> extractAllUrls(String text) {
+    List<String> urls = new ArrayList<>();
+    if (text == null || text.isEmpty()) {
+      return urls;
     }
-    String url = stripTrailingPunctuation(matcher.group(1));
-    return url.isEmpty() ? Optional.empty() : Optional.of(url);
+    Matcher matcher = DouyinDownloader.URL_PATTERN.matcher(text);
+    while (matcher.find()) {
+      String url = stripTrailingPunctuation(matcher.group(1));
+      if (!url.isEmpty()) {
+        urls.add(url);
+      }
+    }
+    return urls;
+  }
+
+  /** 文本里没有 scheme 时，从快手域名出现处截出 "host/path" 片段。 */
+  private static String findBareKuaishouUrl(String text) {
+    if (text == null || text.isEmpty()) {
+      return "";
+    }
+    String lower = text.toLowerCase(Locale.ROOT);
+    int index = -1;
+    for (String needle :
+        new String[] {"kuaishou.com", "kuaishou.cn", "chenzhongtech.com", "chenzhongtech.cn"}) {
+      int pos = lower.indexOf(needle);
+      if (pos >= 0 && (index < 0 || pos < index)) {
+        index = pos;
+      }
+    }
+    if (index < 0) {
+      return "";
+    }
+    // 向左扩展子域名（v. / www. / v.m.），否则 "v.kuaishou.com/x" 会被截成 "kuaishou.com/x"
+    int start = index;
+    while (start > 0) {
+      char c = text.charAt(start - 1);
+      if (Character.isLetterOrDigit(c) || c == '.' || c == '-') {
+        start--;
+      } else {
+        break;
+      }
+    }
+    String tail = text.substring(start);
+    int end = 0;
+    while (end < tail.length() && !Character.isWhitespace(tail.charAt(end))) {
+      end++;
+    }
+    return stripTrailingPunctuation(tail.substring(0, end));
   }
 
   private static String stripTrailingPunctuation(String url) {

@@ -22,6 +22,12 @@ public enum FailReason {
   /** Cookie 缺失或关键字段（msToken / uifid / sessionid）不完整。 */
   COOKIE_MISSING,
 
+  /** 文本里没有找到属于当前平台的链接（可能是纯文字、或粘的是另一个平台的链接）。 */
+  NO_LINK_FOUND,
+
+  /** 链接找到了，但无法解析出作品 ID（短链被换行截断、重定向到验证页等）。 */
+  LINK_INCOMPLETE,
+
   /** 无法归类的其他原因。 */
   UNKNOWN,
 }

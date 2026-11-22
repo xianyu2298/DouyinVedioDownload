@@ -7,6 +7,7 @@ import com.xianyu.vediodownload.douyin.exception.DouyinDownloaderException;
 import com.xianyu.vediodownload.douyin.exception.FailReason;
 import com.xianyu.vediodownload.douyin.exception.FileDownloadException;
 import com.xianyu.vediodownload.douyin.exception.WorkListFetchException;
+import com.xianyu.vediodownload.util.LinkTextNormalizer;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLDecoder;
@@ -60,6 +61,16 @@ public final class DouyinDownloader {
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
           + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
   private static final String DEFAULT_REFERER = "https://www.douyin.com/?recommend=1";
+
+  /**
+   * 移动端 UA，仅用于短链二次尝试。
+   *
+   * <p>实测：某些短链对桌面 UA / 带登录态 Cookie 的请求不返回 302，而是 200 落地页，
+   * 导致拿不到 19 位作品 ID。换移动 UA 且不带 Cookie 再请求一次，通常能拿到正常重定向。
+   */
+  private static final String MOBILE_USER_AGENT =
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+          + "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
   // 抖音对以下受保护接口要求附加 x-secsdk-web-signature，否则返回 403 Uifid Not Found
   private static final String[] SIGNED_PATHS = {
     "/aweme/v1/web/aweme/detail/",
@@ -160,11 +171,12 @@ public final class DouyinDownloader {
   }
 
   private static Optional<String> extractSupportedShareUrl(String text) {
-    Optional<String> firstUrl = extractFirstUrl(text);
-    if (firstUrl.isEmpty()) {
-      return Optional.empty();
+    for (String url : extractAllUrls(LinkTextNormalizer.normalize(text))) {
+      if (isTrustedShareUrl(url)) {
+        return Optional.of(url);
+      }
     }
-    return isTrustedShareUrl(firstUrl.get()) ? firstUrl : Optional.empty();
+    return Optional.empty();
   }
 
   private static boolean isHostInAllowList(String url, String[] allowList) {
@@ -224,6 +236,45 @@ public final class DouyinDownloader {
     }
     String lower = text.toLowerCase(Locale.ROOT);
     return lower.contains("douyin.com") || lower.contains("iesdouyin.com");
+  }
+
+  /** 文本里没有 scheme 时，从域名出现处截出 "host/path" 片段（抖音域名版）。 */
+  private static String findBareDouyinUrl(String text) {
+    return findBareDomainUrl(text, new String[] {"douyin.com", "iesdouyin.com"});
+  }
+
+  /** 通用实现：在文本中定位第一个出现的域名，截到下一个空白为止。 */
+  private static String findBareDomainUrl(String text, String[] domains) {
+    if (text == null || text.isEmpty()) {
+      return "";
+    }
+    String lower = text.toLowerCase(Locale.ROOT);
+    int index = -1;
+    for (String needle : domains) {
+      int pos = lower.indexOf(needle);
+      if (pos >= 0 && (index < 0 || pos < index)) {
+        index = pos;
+      }
+    }
+    if (index < 0) {
+      return "";
+    }
+    // 向左扩展子域名（v. / www. / v.m.），否则 "v.douyin.com/x" 会被截成 "douyin.com/x"
+    int start = index;
+    while (start > 0) {
+      char c = text.charAt(start - 1);
+      if (Character.isLetterOrDigit(c) || c == '.' || c == '-') {
+        start--;
+      } else {
+        break;
+      }
+    }
+    String tail = text.substring(start);
+    int end = 0;
+    while (end < tail.length() && !Character.isWhitespace(tail.charAt(end))) {
+      end++;
+    }
+    return stripTrailingPunctuation(tail.substring(0, end));
   }
 
   private static Optional<String> extractFirstUrl(String text) {
@@ -324,7 +375,7 @@ public final class DouyinDownloader {
 
   private WorkListContext resolveAccountWorkListContext(String accountShareLink, String cookie)
       throws DouyinDownloaderException {
-    ResolvedShareLink resolved = resolveShareLink(accountShareLink, cookie);
+    ResolvedShareLink resolved = resolveShareLink(accountShareLink, cookie, false);
     String secUserId =
         resolveSecUserId(accountShareLink, resolved.resolvedUrl, resolved.normalizedCookie);
     List<JsonNode> awemeList = fetchAccountAwemeList(secUserId, resolved.normalizedCookie);
@@ -333,7 +384,7 @@ public final class DouyinDownloader {
 
   private WorkListContext resolveMixWorkListContext(String mixShareLink, String cookie)
       throws DouyinDownloaderException {
-    ResolvedShareLink resolved = resolveShareLink(mixShareLink, cookie);
+    ResolvedShareLink resolved = resolveShareLink(mixShareLink, cookie, false);
     String mixId = resolveMixId(mixShareLink, resolved.resolvedUrl, resolved.normalizedCookie);
     List<JsonNode> awemeList = fetchMixAwemeList(mixId, resolved.normalizedCookie);
     return new WorkListContext(resolved.normalizedCookie, awemeList);
@@ -345,38 +396,115 @@ public final class DouyinDownloader {
       throw new IllegalArgumentException("shareLink is blank");
     }
 
-    ResolvedShareLink resolved = resolveShareLink(shareLink, cookie);
-    String awemeId =
-        extractAwemeId(resolved.resolvedUrl)
-            .orElseGet(
-                () ->
-                    extractAwemeId(shareLink)
-                        .orElseThrow(
-                            () ->
-                                new IllegalArgumentException(
-                                    "Cannot extract aweme_id from shareLink")));
+    String text = LinkTextNormalizer.normalize(shareLink);
+    ResolvedShareLink resolved = resolveShareLink(text, cookie, true);
+
+    Optional<String> idFromResolved = extractAwemeId(resolved.resolvedUrl);
+    if (idFromResolved.isEmpty()) {
+      idFromResolved = extractAwemeId(text);
+    }
+    if (idFromResolved.isEmpty()) {
+      // 短链未做 302（服务端直接返回落地页）时，从页面 HTML 里兜底提取
+      idFromResolved = extractAwemeIdFromHtml(resolved.body);
+    }
+    if (idFromResolved.isEmpty() && !resolved.inputUrl.isEmpty()) {
+      // 二次尝试：移动端 UA + 不带 Cookie，规避短链服务对桌面/登录态请求返回落地页
+      try {
+        HttpProbe retry = probeShortLink(resolved.inputUrl, resolved.normalizedCookie, true, true);
+        Optional<String> retryId = extractAwemeId(retry.finalUrl);
+        if (retryId.isEmpty()) {
+          retryId = extractAwemeIdFromHtml(retry.body);
+        }
+        idFromResolved = retryId;
+      } catch (DouyinDownloaderException ignored) {
+        // 二次尝试失败不覆盖首次结果，最终错误信息仍以首次探测为准
+      }
+    }
+    if (idFromResolved.isEmpty()) {
+      throw new AwemeDetailFetchException(
+          "cannot extract aweme_id, status="
+              + resolved.status
+              + ", final="
+              + resolved.resolvedUrl
+              + ", bodyLen="
+              + resolved.body.length(),
+          FailReason.LINK_INCOMPLETE);
+    }
+    String awemeId = idFromResolved.get();
     JsonNode aweme = fetchAwemeDetail(awemeId, resolved.normalizedCookie);
     return new SingleAwemeContext(resolved.normalizedCookie, awemeId, aweme);
   }
 
-  private ResolvedShareLink resolveShareLink(String shareLink, String cookie)
+  /**
+   * 从分享文本中挑出可用的分享链接并解析重定向。
+   *
+   * <p>与旧实现的关键差异：
+   * <ul>
+   *   <li>先做字符归一化（全角转半角、去零宽），避免输入法/转发改形导致匹配失败；
+   *   <li>扫描文本中**所有** URL，取第一个域名属于本平台的，而不是只看第一个 URL——
+   *       用户剪贴板里常残留别的内容，旧逻辑会因此误报「链接格式不正确」；
+   *   <li>找不到链接、解析不出 ID、重定向到非本平台域名分别抛不同的 {@link FailReason}，
+   *       让 UI 能给出针对性提示。
+   * </ul>
+   */
+  private ResolvedShareLink resolveShareLink(String shareLink, String cookie, boolean captureBody)
       throws DouyinDownloaderException {
     String normalizedCookie = normalizeCookie(cookie);
-    Optional<String> extractedUrl = extractFirstUrl(shareLink);
-    if (extractedUrl.isPresent() && !isTrustedShareUrl(extractedUrl.get())) {
-      throw new IllegalArgumentException("Unsupported share link host");
+    String text = LinkTextNormalizer.normalize(shareLink);
+
+    List<String> urls = extractAllUrls(text);
+    String picked = null;
+    for (String candidate : urls) {
+      if (isTrustedShareUrl(candidate)) {
+        picked = candidate;
+        break;
+      }
     }
-    String rawUrl = extractedUrl.orElse(shareLink.trim());
-    // 兼容用户只复制短链主体（如 "v.douyin.com/xxx"，没有 https:// 前缀）的情况：
-    // 此时正则匹配不到 URL，但域名明确属于抖音，自动补全 scheme 后再解析。
-    if (extractedUrl.isEmpty() && !rawUrl.contains("://") && looksLikeDouyinDomain(rawUrl)) {
-      rawUrl = "https://" + rawUrl;
+
+    if (picked == null) {
+      // 兼容用户只复制了 "v.douyin.com/xxx" 主体（没有 https:// 前缀）
+      String bare = findBareDouyinUrl(text);
+      if (bare.isEmpty()) {
+        throw new AwemeDetailFetchException(
+            "no douyin link found, urls=" + urls, FailReason.NO_LINK_FOUND);
+      }
+      picked = "https://" + bare;
     }
-    String resolvedUrl = resolveFinalUrl(rawUrl, normalizedCookie);
-    if (extractFirstUrl(resolvedUrl).isPresent() && !isTrustedShareUrl(resolvedUrl)) {
-      throw new IllegalArgumentException("Unsupported resolved share link host");
+
+    HttpProbe probe = probeShortLink(picked, normalizedCookie, false, captureBody);
+    if (extractFirstUrl(probe.finalUrl).isPresent() && !isTrustedShareUrl(probe.finalUrl)) {
+      throw new AwemeDetailFetchException(
+          "resolved to untrusted host: " + probe.finalUrl, FailReason.LINK_INCOMPLETE);
     }
-    return new ResolvedShareLink(normalizedCookie, resolvedUrl);
+    return new ResolvedShareLink(
+        normalizedCookie, probe.finalUrl, picked, probe.status, probe.body);
+  }
+
+  /**
+   * 提取文本中所有 URL（已剥离尾部包裹标点），供域名筛选与诊断使用。
+   */
+  private static List<String> extractAllUrls(String text) {
+    List<String> urls = new ArrayList<>();
+    if (text == null || text.isEmpty()) {
+      return urls;
+    }
+    Matcher matcher = URL_PATTERN.matcher(text);
+    while (matcher.find()) {
+      String url = stripTrailingPunctuation(matcher.group(1));
+      if (!url.isEmpty()) {
+        urls.add(url);
+      }
+    }
+    return urls;
+  }
+
+  /**
+   * 供「复制诊断信息」使用的链接识别结果：归一化后取前 3 个 URL。
+   * 用户反馈解析异常时，这几个值能直接说明正则到底抓到了什么。
+   */
+  public static List<String> describeLinks(String text) {
+    List<String> urls = extractAllUrls(LinkTextNormalizer.normalize(text));
+    return urls.size() > 3 ? new ArrayList<>(urls.subList(0, 3)) : urls;
   }
 
   private List<AwemeProfile> collectAwemeProfileList(
@@ -683,26 +811,150 @@ public final class DouyinDownloader {
   }
 
   private String resolveFinalUrl(String url, String cookie) throws DouyinDownloaderException {
-    Request request;
+    return probeShortLink(url, cookie, false, false).finalUrl;
+  }
+
+  /**
+   * 请求短链并返回最终地址、状态码与正文片段。
+   *
+   * <p>两种模式：
+   * <ul>
+   *   <li>默认：沿用分享链接请求头（桌面 UA + 可选 Cookie）；
+   *   <li>mobile=true：移动端 UA 且不带 Cookie——短链服务对桌面/登录态请求偶发返回落地页
+   *       而不是 302，此时换一次身份往往就能拿到真正的重定向。
+   * </ul>
+   *
+   * @param captureBody 是否保留 HTML 正文（仅在需要从落地页兜底提取作品 ID 时为 true）
+   */
+  private HttpProbe probeShortLink(String url, String cookie, boolean mobile, boolean captureBody)
+      throws DouyinDownloaderException {
+    Request.Builder builder;
     try {
-      request =
-          requestBuilder(url, cookie)
-              .get()
-              .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-              .build();
-    } catch (Exception ignored) {
-      return url;
+      builder =
+          mobile
+              ? new Request.Builder()
+                  .url(url)
+                  .header("User-Agent", MOBILE_USER_AGENT)
+                  .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+              : requestBuilder(url, cookie)
+                  .get()
+                  .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+    } catch (Exception e) {
+      // 地址非法或请求头含非法字符：不再静默返回原地址（那会把问题伪装成「解析不出 ID」）
+      throw new AwemeDetailFetchException(
+          "cannot build request for " + url + ": " + e.getMessage(), FailReason.LINK_INCOMPLETE);
     }
 
-    try (Response response = httpClient.newCall(request).execute()) {
-      return response.request().url().toString();
+    // 兜底要从正文里抓 ID，必须禁用压缩：requestBuilder 里设的是 Accept-Encoding: */*
+    // （会让 OkHttp 不做透明解压），不覆盖的话读到的可能是 gzip 二进制。
+    builder.header("Accept-Encoding", "identity");
+
+    try (Response response = httpClient.newCall(builder.build()).execute()) {
+      String finalUrl = response.request().url().toString();
+      // 最终地址里已有 19 位作品 ID 时无需再读正文，省流量
+      boolean needBody = captureBody && !finalUrl.matches(".*\\d{19}.*");
+      String body = needBody ? readHtmlBody(response.body()) : "";
+      return new HttpProbe(finalUrl, response.code(), body);
     } catch (IOException e) {
-      // 短链重定向失败（通常是网络不可达）：原样返回 url 会掩盖网络问题，
-      // 后续提取不到 aweme_id 会被误判为「链接格式不正确」。这里显式抛出网络异常。
       throw new AwemeDetailFetchException(
-          "Network error while resolving share link: " + e.getMessage(),
-          FailReason.NETWORK);
+          "Network error while resolving share link: " + e.getMessage(), FailReason.NETWORK);
     }
+  }
+
+  /**
+   * 只读取 HTML/文本正文，最多 200KB。
+   *
+   * <p>两个健壮性处理：
+   * <ul>
+   *   <li>Content-Type 缺失时也尝试读取（有些拦截页不带类型）；
+   *   <li>若响应仍是 gzip（服务端忽略了 identity），先解压再返回，否则正则会匹配到二进制。
+   * </ul>
+   */
+  private static String readHtmlBody(ResponseBody body) {
+    if (body == null) {
+      return "";
+    }
+    String contentType = body.contentType() == null ? "" : body.contentType().toString();
+    if (!contentType.isEmpty()
+        && !contentType.contains("html")
+        && !contentType.contains("text")) {
+      return "";
+    }
+    byte[] bytes;
+    try (java.io.InputStream in = body.byteStream()) {
+      java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+      byte[] buffer = new byte[8192];
+      int read;
+      int total = 0;
+      while ((read = in.read(buffer)) != -1 && total < 200 * 1024) {
+        out.write(buffer, 0, read);
+        total += read;
+      }
+      bytes = out.toByteArray();
+    } catch (IOException e) {
+      return "";
+    }
+
+    if (bytes.length > 2 && (bytes[0] & 0xFF) == 0x1F && (bytes[1] & 0xFF) == 0x8B) {
+      try (java.util.zip.GZIPInputStream gzip =
+          new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(bytes))) {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int read;
+        int total = 0;
+        while ((read = gzip.read(buffer)) != -1 && total < 200 * 1024) {
+          out.write(buffer, 0, read);
+          total += read;
+        }
+        return out.toString(StandardCharsets.UTF_8.name());
+      } catch (IOException e) {
+        return "";
+      }
+    }
+    try {
+      return new String(bytes, StandardCharsets.UTF_8.name());
+    } catch (java.io.UnsupportedEncodingException e) {
+      return "";
+    }
+  }
+
+  /**
+   * 从落地页 HTML 里兜底提取作品 ID（分享页未做 302 时唯一可行的手段）。
+   *
+   * <p>抖音落地页的 ID 可能以多种形式出现：{@code video/7708...}、{@code modal_id":"7708..."}、
+   * {@code modal_id=7708...}、{@code item_ids=...}、{@code "aweme_id":"7708..."}。
+   * 用 {@code \D{0,4}} 吃掉键名与数字之间的引号/冒号/等号，避免为每种形式各写一条正则。
+   */
+  private static Optional<String> extractAwemeIdFromHtml(String html) {
+    if (html == null || html.isEmpty()) {
+      return Optional.empty();
+    }
+    // 先按「指向当前作品」的高置信形式匹配；这些键通常只描述当前分享的作品
+    String[] specific = {
+      "share/video/(\\d{19})",
+      "modal_id\\D{0,4}(\\d{19})",
+      "aweme_id\\D{0,4}(\\d{19})",
+      "item_ids?\\D{0,4}(\\d{19})"
+    };
+    for (String regex : specific) {
+      Matcher matcher = Pattern.compile(regex).matcher(html);
+      if (matcher.find()) {
+        return Optional.of(matcher.group(1));
+      }
+    }
+    // 兜底：通用 video/{id}。仅在页面里唯一时才采用——落地页常带推荐列表，
+    // 多个 video/{id} 时无法判断哪个是目标作品，宁可判失败也不下错视频。
+    Matcher generic = Pattern.compile("video/(\\d{19})").matcher(html);
+    String unique = null;
+    int count = 0;
+    while (generic.find()) {
+      count++;
+      if (count > 1) {
+        return Optional.empty();
+      }
+      unique = generic.group(1);
+    }
+    return unique == null ? Optional.empty() : Optional.of(unique);
   }
 
   private JsonNode fetchAwemeDetail(String awemeId, String cookie)
@@ -1683,9 +1935,33 @@ public final class DouyinDownloader {
   private static final class ResolvedShareLink {
     final String normalizedCookie;
     final String resolvedUrl;
-    ResolvedShareLink(String normalizedCookie, String resolvedUrl) {
+    /** 原始（未重定向）地址，用于二次尝试。 */
+    final String inputUrl;
+    /** 最后一次响应状态码，0 表示未拿到响应。 */
+    final int status;
+    /** 重定向后页面正文（仅 HTML，最多 200KB），用于从落地页里兜底提取作品 ID。 */
+    final String body;
+
+    ResolvedShareLink(
+        String normalizedCookie, String resolvedUrl, String inputUrl, int status, String body) {
       this.normalizedCookie = normalizedCookie;
       this.resolvedUrl = resolvedUrl;
+      this.inputUrl = inputUrl == null ? "" : inputUrl;
+      this.status = status;
+      this.body = body == null ? "" : body;
+    }
+  }
+
+  /** 一次短链探测的结果：最终地址 + 状态码 + 正文片段。 */
+  private static final class HttpProbe {
+    final String finalUrl;
+    final int status;
+    final String body;
+
+    HttpProbe(String finalUrl, int status, String body) {
+      this.finalUrl = finalUrl;
+      this.status = status;
+      this.body = body == null ? "" : body;
     }
   }
 

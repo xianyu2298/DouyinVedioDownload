@@ -2,6 +2,7 @@ package com.xianyu.vediodownload.ui.screens
 
 import android.app.Application
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -33,6 +34,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 作者下载 ViewModel —— 复用 DownloadViewModel 的批量下载与通知基础设施，
@@ -71,6 +75,8 @@ data class AuthorUiState(
     val isLoading: Boolean = false,
     val loadingMessage: String = "正在解析作者主页...",
     val error: String? = null,
+    /** 解析失败时的诊断文本，供用户一键复制反馈。 */
+    val diagnostics: String? = null,
     val author: AuthorPreview? = null,
     val works: List<AwemeProfile> = emptyList(),
     val isSelectionMode: Boolean = false,
@@ -165,6 +171,7 @@ class AuthorViewModel(application: Application) : AndroidViewModel(application) 
                 url = "",
                 isLoading = false,
                 error = null,
+                diagnostics = null,
                 author = null,
                 works = emptyList(),
                 isSelectionMode = false,
@@ -200,14 +207,17 @@ class AuthorViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        // 预校验：看起来不像抖音分享链接就直接提示，避免发起网络请求后失败
+        // 预校验：明显不是抖音链接时直接提示，避免发起注定失败的请求
+        val kuaishouLink = raw.lowercase().let {
+            it.contains("kuaishou.com") || it.contains("kuaishou.cn") ||
+                it.contains("chenzhongtech.com") || it.contains("chenzhongtech.cn")
+        }
+        if (kuaishouLink) {
+            failAuthor("当前为抖音模式，你粘贴的是快手链接，请到设置页切换为快手模式", null)
+            return
+        }
         if (!looksLikeDouyinShareLink(raw)) {
-            _uiState.update {
-                it.copy(
-                    isLoading = false,
-                    error = "链接格式不正确，请粘贴作者主页链接或任意抖音作品分享链接"
-                )
-            }
+            failAuthor("没有识别到抖音链接，请粘贴作者主页链接或作品分享链接", null)
             return
         }
 
@@ -216,6 +226,7 @@ class AuthorViewModel(application: Application) : AndroidViewModel(application) 
                 isLoading = true,
                 loadingMessage = "正在解析作者主页...",
                 error = null,
+                diagnostics = null,
                 author = null,
                 works = emptyList(),
                 isSelectionMode = false,
@@ -287,34 +298,55 @@ class AuthorViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
             } catch (e: WorkListFetchException) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = resolveErrorMessage(e, forWorkList = true)
-                    )
-                }
+                failAuthor(resolveErrorMessage(e, forWorkList = true), e)
             } catch (e: AwemeDetailFetchException) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = resolveErrorMessage(e, forWorkList = false)
-                    )
-                }
+                failAuthor(resolveErrorMessage(e, forWorkList = false), e)
             } catch (e: IllegalArgumentException) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = e.message
-                            ?: "链接格式不正确，请粘贴作者主页链接或任意抖音作品分享链接"
-                    )
-                }
+                failAuthor(
+                    e.message ?: "链接无法识别，请粘贴作者主页链接或作品分享链接",
+                    e
+                )
             } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = "解析失败，请检查网络后重试"
-                    )
-                }
+                failAuthor("解析失败，请检查网络后重试", e)
+            }
+        }
+    }
+
+    /** 统一的失败出口：写错误文案 + 生成诊断文本（用户可一键复制反馈）。 */
+    private fun failAuthor(message: String, cause: Throwable?) {
+        _uiState.update {
+            it.copy(
+                isLoading = false,
+                error = message,
+                diagnostics = buildAuthorDiagnostics(_uiState.value.url.trim(), cause),
+            )
+        }
+    }
+
+    private fun buildAuthorDiagnostics(rawText: String, cause: Throwable?): String {
+        val app = getApplication<Application>()
+        val pkg = runCatching {
+            app.packageManager.getPackageInfo(app.packageName, 0)
+        }.getOrNull()
+        val versionName = pkg?.versionName ?: "?"
+        val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            pkg?.longVersionCode ?: 0L
+        } else {
+            @Suppress("DEPRECATION")
+            (pkg?.versionCode ?: 0).toLong()
+        }
+        val links = runCatching { DouyinDownloader.describeLinks(rawText) }
+            .getOrDefault(emptyList())
+        val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+        return buildString {
+            appendLine("【抖净诊断 · 作者页】")
+            appendLine("版本: $versionName ($versionCode)")
+            appendLine("模式: 抖音")
+            appendLine("时间: $time")
+            appendLine("原文: " + rawText.take(200).replace("\n", " ⏎ "))
+            appendLine("识别到的链接: " + if (links.isEmpty()) "无" else links.joinToString(" , "))
+            if (cause != null) {
+                appendLine("异常: ${cause.javaClass.simpleName}: ${cause.message}")
             }
         }
     }
