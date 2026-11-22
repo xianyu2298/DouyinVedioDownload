@@ -31,9 +31,12 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 
 public final class DouyinDownloader {
+  // 用 RFC 3986 的 URL 合法字符白名单，而非黑名单。
+  // 旧的黑名单只排除少量中文标点，漏掉了汉字 / emoji / 全角字符 / 零宽字符，
+  // 一旦 URL 后面紧跟这些字符（抖音分享文案常见），它们会被吞进 URL，
+  // 导致 URI 解析失败并被误报为「链接格式不正确」。
   public static final Pattern URL_PATTERN =
-      Pattern.compile(
-          "(https?://[^\\s\"<>^`{|}\\uFF0C\\u3002\\uFF1B\\uFF01\\uFF1F\\u3001\\u3010\\u3011\\u300A\\u300B]+)");
+      Pattern.compile("(https?://[A-Za-z0-9\\-._~:/?#\\[\\]@!$&'()*+,;=%]+)");
   private static final Pattern AWEME_ID_PATTERN = Pattern.compile("(?<!\\d)(\\d{19})(?!\\d)");
   private static final Pattern SEC_USER_ID_URL_PATTERN = Pattern.compile("/user/([^/?#]+)");
   private static final Pattern SEC_USER_ID_QUERY_PATTERN =
@@ -168,22 +171,59 @@ public final class DouyinDownloader {
     if (url == null || url.isBlank()) {
       return false;
     }
-    try {
-      URI uri = URI.create(url.trim());
-      String host = uri.getHost();
-      if (host == null || host.isBlank()) {
-        return false;
-      }
-      String normalizedHost = host.toLowerCase(Locale.ROOT);
-      for (String allowedHost : allowList) {
-        if (normalizedHost.equals(allowedHost) || normalizedHost.endsWith("." + allowedHost)) {
-          return true;
-        }
-      }
-      return false;
-    } catch (Exception ignored) {
+    String host = extractHost(url.trim());
+    if (host.isEmpty()) {
       return false;
     }
+    String normalizedHost = host.toLowerCase(Locale.ROOT);
+    for (String allowedHost : allowList) {
+      if (normalizedHost.equals(allowedHost) || normalizedHost.endsWith("." + allowedHost)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 手动从 URL 中截取 host（scheme:// 之后，到第一个 / ? # : 之前）。
+   *
+   * <p>不使用 {@code URI.create()}：它对残留的中文 / emoji / 全角字符会直接抛异常，
+   * 那样即使域名本身正确也会被判成不信任链接。手动截取只看 host 段，鲁棒性更好。
+   */
+  private static String extractHost(String url) {
+    int schemeEnd = url.indexOf("://");
+    if (schemeEnd < 0) {
+      return "";
+    }
+    int start = schemeEnd + 3;
+    if (start >= url.length()) {
+      return "";
+    }
+    int end = url.length();
+    for (int i = start; i < url.length(); i++) {
+      char c = url.charAt(i);
+      // ':' 用于截掉端口；'/' '?' '#' 用于截掉路径与查询
+      if (c == '/' || c == '?' || c == '#' || c == ':') {
+        end = i;
+        break;
+      }
+    }
+    String host = url.substring(start, end).trim();
+    // 去掉可能的 userinfo（user@host 形式）
+    int at = host.lastIndexOf('@');
+    if (at >= 0 && at + 1 < host.length()) {
+      host = host.substring(at + 1);
+    }
+    return host;
+  }
+
+  /** 文本中是否出现抖音域名（用于给缺 scheme 的短链自动补 https://）。 */
+  private static boolean looksLikeDouyinDomain(String text) {
+    if (text == null || text.isEmpty()) {
+      return false;
+    }
+    String lower = text.toLowerCase(Locale.ROOT);
+    return lower.contains("douyin.com") || lower.contains("iesdouyin.com");
   }
 
   private static Optional<String> extractFirstUrl(String text) {
@@ -192,9 +232,38 @@ public final class DouyinDownloader {
     }
     Matcher matcher = URL_PATTERN.matcher(text);
     if (matcher.find()) {
-      return Optional.ofNullable(matcher.group(1));
+      String url = stripTrailingPunctuation(matcher.group(1));
+      return url.isEmpty() ? Optional.empty() : Optional.of(url);
     }
     return Optional.empty();
+  }
+
+  /**
+   * 去掉 URL 尾部常见的包裹标点。
+   *
+   * <p>分享文本中 URL 常被标点包裹，如 {@code (https://v.douyin.com/xxx/)} 或
+   * {@code https://v.douyin.com/xxx/.}。URL 合法字符白名单包含这些标点，
+   * 因此需要额外剥离，避免把标点带进真机请求。
+   */
+  private static String stripTrailingPunctuation(String url) {
+    if (url == null || url.isEmpty()) {
+      return "";
+    }
+    int end = url.length();
+    while (end > 0) {
+      char c = url.charAt(end - 1);
+      if (c == '.' || c == ',' || c == ')' || c == ']' || c == '}'
+          || c == '\'' || c == '"' || c == ';' || c == ':' || c == '!' || c == '*') {
+        end--;
+      } else {
+        break;
+      }
+    }
+    // 保护：截断后至少保留 "scheme://host" 的骨架，避免把 https:// 本身截坏
+    if (end < "https://a".length()) {
+      return url;
+    }
+    return url.substring(0, end);
   }
 
   public AwemeProfile collectWorkInfo(String shareLink) throws DouyinDownloaderException {
@@ -298,6 +367,11 @@ public final class DouyinDownloader {
       throw new IllegalArgumentException("Unsupported share link host");
     }
     String rawUrl = extractedUrl.orElse(shareLink.trim());
+    // 兼容用户只复制短链主体（如 "v.douyin.com/xxx"，没有 https:// 前缀）的情况：
+    // 此时正则匹配不到 URL，但域名明确属于抖音，自动补全 scheme 后再解析。
+    if (extractedUrl.isEmpty() && !rawUrl.contains("://") && looksLikeDouyinDomain(rawUrl)) {
+      rawUrl = "https://" + rawUrl;
+    }
     String resolvedUrl = resolveFinalUrl(rawUrl, normalizedCookie);
     if (extractFirstUrl(resolvedUrl).isPresent() && !isTrustedShareUrl(resolvedUrl)) {
       throw new IllegalArgumentException("Unsupported resolved share link host");
