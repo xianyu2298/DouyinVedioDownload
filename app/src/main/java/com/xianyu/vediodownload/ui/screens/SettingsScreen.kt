@@ -10,6 +10,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -33,6 +34,8 @@ import com.xianyu.vediodownload.R
 import com.xianyu.vediodownload.model.Platform
 import com.xianyu.vediodownload.ui.designsystem.component.*
 import com.xianyu.vediodownload.ui.designsystem.theme.*
+import com.xianyu.vediodownload.update.UpdateChecker
+import com.xianyu.vediodownload.update.UpdateInfo
 import com.xianyu.vediodownload.util.CacheManager
 import com.xianyu.vediodownload.util.CookieManager
 import com.xianyu.vediodownload.util.toReadableSize
@@ -162,6 +165,11 @@ private fun SettingsHomeContent(
     val coroutineScope = rememberCoroutineScope()
     var showCookieDialog by remember { mutableStateOf(false) }
     var showCheckCookieDialog by remember { mutableStateOf(false) }
+
+    // 检查更新（手动检查忽略 12 小时缓存，确保能反映最新状态）
+    val updateChecker = remember(context) { UpdateChecker(context.applicationContext) }
+    var isCheckingUpdate by remember { mutableStateOf(false) }
+    var manualUpdate by remember { mutableStateOf<UpdateInfo?>(null) }
 
     // 缓存相关状态
     var appCacheBytes by remember { mutableStateOf(0L) }
@@ -464,6 +472,51 @@ private fun SettingsHomeContent(
         )
 
         Text(
+            text = if (isCheckingUpdate) {
+                stringResource(R.string.settings_checking_update)
+            } else {
+                stringResource(R.string.settings_check_update)
+            },
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = if (isCheckingUpdate) tokens.textTertiary else Color(0xFF3B82F6),
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .padding(top = 6.dp)
+                .clickable(enabled = !isCheckingUpdate) {
+                    isCheckingUpdate = true
+                    coroutineScope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            runCatching { updateChecker.check(true) }
+                        }
+                        isCheckingUpdate = false
+                        result.fold(
+                            onSuccess = { info ->
+                                if (info == null) {
+                                    Toast.makeText(
+                                        context,
+                                        R.string.update_is_latest,
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                } else {
+                                    // 手动检查看到过的版本，之后不再自动弹窗
+                                    updateChecker.markPrompted(info.version())
+                                    manualUpdate = info
+                                }
+                            },
+                            onFailure = {
+                                Toast.makeText(
+                                    context,
+                                    R.string.update_check_failed,
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        )
+                    }
+                }
+        )
+
+        Text(
             text = stringResource(R.string.settings_credits),
             fontSize = 11.sp,
             color = tokens.textTertiary,
@@ -486,6 +539,14 @@ private fun SettingsHomeContent(
         CookieDialog(
             cookieManager = cookieManager,
             onDismiss = { showCookieDialog = false }
+        )
+    }
+
+    manualUpdate?.let { info ->
+        UpdateDialog(
+            info = info,
+            onUpdate = { manualUpdate = null },
+            onDismiss = { manualUpdate = null },
         )
     }
 

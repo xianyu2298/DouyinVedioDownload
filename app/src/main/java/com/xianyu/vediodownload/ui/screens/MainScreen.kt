@@ -16,9 +16,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.xianyu.vediodownload.model.Platform
+import com.xianyu.vediodownload.update.UpdateChecker
+import com.xianyu.vediodownload.update.UpdateInfo
 import com.xianyu.vediodownload.util.CookieManager
 import com.xianyu.vediodownload.util.PlatformModeManager
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -99,6 +103,38 @@ fun MainScreen(
                 cookieManager.setDisclaimerShown()
                 showDisclaimer = false
             }
+        )
+    }
+
+    // ===== 冷启动检查更新 =====
+    // 1) 免责声明未确认时跳过本次，避免两个弹窗叠加；
+    // 2) 结果走 12 小时缓存，避免 Gitee 匿名接口被按 IP 限流；
+    // 3) 任何失败静默，不打扰用户；4) 同一版本只提示一次。
+    val updateChecker = remember(application) { UpdateChecker(application) }
+    var pendingUpdate by remember { mutableStateOf<UpdateInfo?>(null) }
+
+    LaunchedEffect(Unit) {
+        if (!cookieManager.isDisclaimerShown()) return@LaunchedEffect
+        delay(1500) // 让首屏先完成布局，避免启动瞬间卡顿
+        val info = withContext(Dispatchers.IO) {
+            runCatching { updateChecker.check(false) }.getOrNull()
+        }
+        if (info != null && updateChecker.shouldPrompt(info.version())) {
+            pendingUpdate = info
+        }
+    }
+
+    pendingUpdate?.let { info ->
+        UpdateDialog(
+            info = info,
+            onUpdate = {
+                updateChecker.markPrompted(info.version())
+                pendingUpdate = null
+            },
+            onDismiss = {
+                updateChecker.markPrompted(info.version())
+                pendingUpdate = null
+            },
         )
     }
 

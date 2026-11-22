@@ -57,6 +57,7 @@
 16. [后续迭代建议](#16-后续迭代建议)
 17. [变更记录](#17-变更记录)
 18. [快手解析（Kuaishou）](#18-快手解析kuaishou)
+19. [检查更新（Gitee Releases）](#19-检查更新gitee-releases)
 
 ---
 
@@ -693,6 +694,21 @@ fetchAwemeDetail try: ...
 
 ## 17. 变更记录
 
+### 2026-11-22（补 4）：Gitee 检查更新
+
+新增基于 Gitee Releases 的版本检查，详见第 19 节。
+
+| 文件 | 改动 |
+|------|------|
+| `update/UpdateInfo.java`（新增） | 版本信息数据类 |
+| `update/UpdateChecker.java`（新增） | API 请求、JSON 解析、版本比较、12h 缓存、已提示版本记录 |
+| `ui/screens/UpdateDialog.kt`（新增） | 更新弹窗 + 外部链接跳转 |
+| `MainScreen.kt` | 冷启动检查（延迟 1.5s、免责声明未确认则跳过、失败静默） |
+| `SettingsScreen.kt` | 版本号下方「检查更新」入口（忽略缓存） |
+| `strings.xml` | 新增 8 条更新相关文案 |
+
+**验证**：版本比较 12 项用例全部通过（用编译产物直接跑 `isNewer`/`normalizeVersion`）；`assembleDebug` BUILD SUCCESSFUL。网络请求与弹窗需真机验证。
+
 ### 2026-11-22（补 3）：文案平台无关化
 
 风控与通用提示不再写死「抖音」，改为「平台」，避免快手模式下文案自相矛盾。
@@ -898,6 +914,67 @@ KuaishouPhotoParser → AwemeProfile(Platform.KUAISHOU)
 
 ---
 
+## 19. 检查更新（Gitee Releases）
+
+### 19.1 数据源
+
+```
+GET https://gitee.com/api/v5/repos/jbl2003/DouyinVedioDownload/releases/latest
+```
+
+免 token、免登录。实测可用字段：
+
+| 字段 | 用途 |
+|------|------|
+| `tag_name`（`v1.4`） | 版本比较（去 v 前缀后按 `.` 分段比数字） |
+| `name`（`抖净v1.4`） | 弹窗副标题 |
+| `body` | 弹窗正文，纯文本原样展示（保留换行） |
+| `created_at` | 弹窗副标题的日期（取前 10 位） |
+| `assets[].browser_download_url` | 取第一个 `.apk` 作为「立即更新」跳转地址 |
+| `prerelease` | 为 true 时直接视为无更新，避免用户装到测试包 |
+
+### 19.2 关键实现
+
+| 文件 | 职责 |
+|------|------|
+| `update/UpdateInfo.java` | 数据类 |
+| `update/UpdateChecker.java` | 请求 / 解析 / 版本比较 / 12 小时缓存 / 已提示版本记录 |
+| `ui/screens/UpdateDialog.kt` | 更新弹窗 + `openExternalUrl()` |
+| `MainScreen.kt` | 冷启动自动检查 |
+| `SettingsScreen.kt` | 版本号下方「检查更新」入口（忽略缓存，强制联网） |
+
+**版本比较规则**（`isNewer`）：去 `v` 前缀 → 截断 `-`/`+` 后缀 → 按 `.` 拆段 → 逐段比数字，缺段补 0。
+任一侧解析不出有效段则返回 false（宁可漏提示，不误打扰）。已覆盖 12 个用例，含 `1.10 vs 1.9`（不能按字符串比较）、`1.4 vs 1.4.0`（视为相同）、`release-1.5`（非法 tag 不误报）。
+
+**触发与节流**：
+
+| 场景 | 行为 |
+|------|------|
+| 冷启动 | 延迟 1.5s 后台检查；免责声明未确认则跳过本次 |
+| 缓存 | 12 小时内不重复请求（Gitee 匿名接口按 IP 限流，`X-RateLimit-Limit: 60`） |
+| 同版本 | `update_prompted_version` 记录已提示版本，只弹一次 |
+| 自动检查失败 | 完全静默 |
+| 手动检查 | 忽略缓存；失败 Toast「检查失败」，无更新 Toast「已是最新版本」 |
+
+**不做的事**：不内置 access_token（APK 可反编译）、不做静默下载安装（需 `REQUEST_INSTALL_PACKAGES` 且与签名绑定），只跳浏览器打开 APK 直链；无 APK 附件时回落到 releases 页面。
+
+### 19.3 发版流程
+
+1. Gitee 建 release，tag 固定 `vX.Y` 格式（解析依赖该格式）
+2. 上传 APK 附件（文件名以 `.apk` 结尾即可）
+3. release 正文用纯文本（`✅` 列表），弹窗会原样展示；写了 Markdown 语法会看到原始符号
+4. 应用侧版本号同步改 `versionName`，否则不会触发提示
+
+### 19.4 遇到限流怎么办
+
+症状：自动检查长期无提示、手动检查报「检查失败」。处置顺序：
+
+1. 确认 `X-RateLimit-Remaining`（Gitee 按 IP 计）
+2. 若频繁为 0：改用仓库内 `version.json` 静态文件（走 raw CDN，不受 API 限流），只需替换 `UpdateChecker` 的 URL 与字段映射，UI 与缓存逻辑不动
+3. 不要为了绕限流而内置 token
+
+---
+
 ## 附录 A：关键文件速查表
 
 | 需求 | 文件 | 关键方法 |
@@ -905,6 +982,8 @@ KuaishouPhotoParser → AwemeProfile(Platform.KUAISHOU)
 | 解析快手作品 | kuaishou/KuaishouDownloader.java | `collectWorkInfo()` |
 | 快手字段映射 | kuaishou/KuaishouPhotoParser.java | `parse(photo, photoIdToken)` |
 | 解析模式读写 | util/PlatformModeManager.java | `getMode()` / `setMode()` |
+| 检查更新 | update/UpdateChecker.java | `check(ignoreCache)` / `isNewer()` |
+| 更新弹窗 | ui/screens/UpdateDialog.kt | `UpdateDialog()` |
 | 解析单个作品 | DouyinDownloader.java | `collectWorkInfo()` |
 | 抖音清晰度标注 | DouyinDownloader.java | `buildVideoQualityLabel()` |
 | 解析作者作品 | DouyinDownloader.java | `collectAccountWorksInfo()` |
