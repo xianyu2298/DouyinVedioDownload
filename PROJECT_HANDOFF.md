@@ -12,6 +12,8 @@
 
 解析、下载、Live 合成、预览、历史、缓存等功能均可用。签名算法已升级至 **bdms.js v1.0.1.19-fix.01**（192 字符 a_bogus + x-secsdk-web-signature），2026-11-22 验证原作者 v0.0.5 未改动签名算法。
 
+**2026-11-22 新增快手支持**：设置页可切换「抖音 / 快手」解析模式（默认抖音）。快手为单作品解析（视频 / 图集 / 单图），**网页端最高仅 720p**，详见第 18 节。
+
 ### 0.2 与本项目用户协作的三条铁律
 
 1. **改代码前必须先给方案，等用户明确说「改吧 / 可以」后再生效**。用户问「怎么改」时只需给方案，不要落盘。
@@ -54,6 +56,7 @@
 15. [已知问题与维护要点](#15-已知问题与维护要点)
 16. [后续迭代建议](#16-后续迭代建议)
 17. [变更记录](#17-变更记录)
+18. [快手解析（Kuaishou）](#18-快手解析kuaishou)
 
 ---
 
@@ -64,6 +67,7 @@
 | 功能 | 说明 |
 |------|------|
 | 视频下载 | 解析抖音分享链接，下载无水印最高码率视频 |
+| 快手下载 | 设置页切换「快手模式」后，解析快手视频 / 图集 / 单图（网页端上限 720p） |
 | 图片作品下载 | 下载图文作品的整套原图 |
 | Live 实况图下载 | 下载静态封面 + 动态短片 |
 | Live 实况图合成 | 将封面 + 短片合成为 Google Motion Photo（.MP.JPG） |
@@ -689,6 +693,67 @@ fetchAwemeDetail try: ...
 
 ## 17. 变更记录
 
+### 2026-11-22（补 3）：文案平台无关化
+
+风控与通用提示不再写死「抖音」，改为「平台」，避免快手模式下文案自相矛盾。
+
+| 文件 | 改动 |
+|------|------|
+| `BatchDownloadConfirmDialog.kt` | 「由于抖音风控…」→「由于平台风控…」（图片页 / Live 页共用） |
+| `AuthorScreen.kt` | 三处批量下载提示「抖音风控」→「平台风控」 |
+| `ErrorMessages.kt` | `COOKIE_MISSING` 字段列表修正为 `sessionid / uifid / ttwid`（原文写 msToken，与实现不符） |
+
+**刻意保留「抖音」字样的位置**（这些功能本身只服务抖音，写平台名更准确）：
+Cookie 设置/检查弹窗、`hint_input_url`（抖音模式专用）、作者页输入提示、`抖音号：`字段、模式切换控件与「快手模式」提示文案。
+
+### 2026-11-22（补 2）：切换解析模式清空输入框
+
+切换「抖音 / 快手」时，除预览外**输入框内容也一并清空**，避免抖音链接残留在快手模式下导致「模式与链接不匹配」。
+
+| 文件 | 改动 |
+|------|------|
+| `DownloadViewModel` | `clearPreview()` → `resetForPlatformSwitch()`，追加 `url = ""`、`isLoading = false`、`loadingMessage`、`cachedProfile` 重置 |
+| `AuthorViewModel` | 新增 `resetForPlatformSwitch()`，清空 url / author / works / 选择态 / 确认弹窗 |
+| `MainScreen` | 4 个 ViewModel（video / image / live / author）全部调用新方法 |
+
+**刻意保留** `batch` / `compose` 状态：切模式不能打断正在后台跑的下载与合成任务，否则进度回调会因 `batch == null` 静默失效。
+
+### 2026-11-22（补）：抖音预览卡显示清晰度 / 帧率
+
+预览卡新增「清晰度 1080p · 60fps」，与快手侧展示一致。
+
+实现要点（`DouyinDownloader.java`）：
+
+| 改动 | 说明 |
+|------|------|
+| 抽出 `collectVideoCandidates(aweme)` | 把 `bit_rate[]` 的收集 + 排序从 `collectVideoUrlCandidates` 中提出来 |
+| 新增 `VIDEO_CANDIDATE_ORDER` | 排序规则：分辨率 → 帧率 → 码率 → 体积（与快手同规则） |
+| 新增 `buildVideoQualityLabel(aweme)` | 取排序后第一个候选的短边作为 `Np`，追加 `· Nfps` |
+| `VideoCandidate` 增 `playUri` | 子方法负责收集 URI，主方法不再重复遍历 |
+
+**关键设计**：候选链与标注共用同一套筛选/排序，避免「显示 1080p 却下 720p」。分辨率按**短边**命名（1080×1920 记 1080p），与业界惯例及快手 `qualityType` 一致。尺寸字段全缺失时只显示帧率或空串，不做猜测。
+
+### 2026-11-22（下午）：快手解析 + 解析模式切换
+
+**1. 新增快手单作品解析**
+
+新增 `kuaishou/KuaishouDownloader.java`（链接识别、photoId 提取、短链 302、页面抓取、错误分类）与 `kuaishou/KuaishouPhotoParser.java`（`INIT_STATE` → `AwemeProfile`）。支持视频 / 图集 / 单图，详见第 18 节。
+
+**2. 全局解析模式**
+
+新增 `util/PlatformModeManager.java`；`model/Platform.java` 增加 `KUAISHOU`；`MainScreen` 持有模式状态并下发到 5 个页面；设置页新增「解析模式」分段控件（默认抖音），快手模式下 Cookie 区块禁用。
+
+**3. 下载与预览适配**
+
+- `DownloaderBridge`：按 `profile.platform()` 选择 UA / Referer / 是否附 Cookie；文件名兜底 `kuaishou_<id>`；图片扩展名补 `.webp`（此前 webp 会被改名成 .jpg）。
+- `AwemeProfile`：新增 `qualityLabel` 字段；`MediaPreview` 同名字段；`VideoPreviewCard` 如实展示「清晰度 720p · 30fps」。
+- `VideoPlayerActivity`：Referer 改由 intent 传入，快手用移动页地址。
+- `LiveScreen` / `AuthorScreen`：快手模式渲染 `KuaishouUnsupportedNotice` 占位提示，保留 Tab 避免 Pager 索引变化。
+
+**4. 结论性事实（供后续判断，勿重复调研）**
+
+快手网页端（含登录 Cookie）最高仅 720p；`/rest/wd/photo/info` 对任意 `__NS_sig3` 均返回 `2001 antispam need captcha`；`live_api` 已下线。开源项目（KS-Downloader、videodl）同为 720p，res-downloader 靠 MITM 抓包，不属解析路线。
+
 ### 2026-11-22：链接格式误报修复 + 输入框快捷操作
 
 **1. 链接格式误报（方案 B）**
@@ -764,11 +829,84 @@ fetchAwemeDetail try: ...
 
 ---
 
+## 18. 快手解析（Kuaishou）
+
+### 18.1 定位与边界
+
+2026-11-22 接入，作为「解析模式」的第二平台（设置页切换，默认抖音）。**只支持单作品**：
+
+| 能力 | 支持 | 说明 |
+|------|------|------|
+| 视频 | ✅ | 无水印、原帧率、零转码 |
+| 图集 / 单图 | ✅ | 图集为 webp 原图 |
+| Live 实况图 | ❌ | 快手无「封面 + 短片」结构，快手模式显示占位提示 |
+| 作者主页 / 合集 | ❌ | 依赖登录态 GraphQL + 请求签名，未接入 |
+
+### 18.2 数据源（实测结论，别再重复踩坑）
+
+| 项目 | 结论 |
+|------|------|
+| 页面 | `https://v.m.chenzhongtech.com/fw/photo/{photoId}` 的 `window.INIT_STATE` |
+| Cookie | **不需要**，匿名可解析 |
+| UA | **必须移动端 UA**；桌面 UA 会被 302 到 www，且页面不含作品数据 |
+| GraphQL `visionVideoDetail` | 匿名返回 `result:400002` + 滑块验证；带登录 Cookie 可通，但阶梯仍只有 720p |
+| `/rest/wd/photo/info`（App 端） | 任意 `__NS_sig3` 都返回 `2001 antispam need captcha`，纯签名无法攻克 |
+| `live_api/profile/feedbyid` | 已下线（302 → /404），KS-Downloader 里也是死代码 |
+
+**画质上限**：网页端（含登录态）`manifest.adaptationSet` 只下发一档 720p（h264 + hevc 各一），帧率保留源帧率（实测 25 / 24.9 / 30 / 44 / 60fps）。这是服务端策略，客户端无法突破；UI 用 `qualityLabel` 如实标注，不做「伪原画」。
+
+### 18.3 解析流程
+
+```
+分享文案 → 抽 URL（复用 DouyinDownloader.URL_PATTERN）
+   ↓
+域名白名单：kuaishou.com / kuaishou.cn / chenzhongtech.com / chenzhongtech.cn
+   ↓
+抽 photoId：/short-video/{id} | /fw/photo/{id} | /photo/{id} | /u/*/{id} | ?photoId=
+   ↓（短链 v.kuaishou.com/xxx、kuaishou.com/f/xxx 走 302 跟随）
+GET https://v.m.chenzhongtech.com/fw/photo/{id}（移动 UA）
+   ↓
+window.INIT_STATE → Jackson 解析 → 递归找含 photoId 的 photo 节点
+   ↓（找不到 → WORK_NOT_FOUND，不会误判风控）
+KuaishouPhotoParser → AwemeProfile(Platform.KUAISHOU)
+```
+
+### 18.4 字段映射
+
+| 作品类型 | 取值方式 |
+|---------|---------|
+| `VIDEO` | `manifest.adaptationSet[].representation[]`，按 分辨率 → 帧率 → 码率 排序，最高档首位；`mainMvUrls` 兜底 |
+| `HORIZONTAL_ATLAS` / `VERTICAL_ATLAS` | `https://{ext_params.atlas.cdn[0]}{atlas.list[i]}` |
+| `SINGLE_PICTURE` | `coverUrls[0]` |
+
+其它：`caption` → desc，`userName` → 作者，`headUrl` → 头像，`timestamp/1000` → createTime。
+
+### 18.5 模式切换设计
+
+- 持久化：`util/PlatformModeManager.java`（`app_prefs` / `app_mode`），默认 DOUYIN
+- 状态：`MainScreen` 持有 `appMode`，下发到 5 个页面；切换时调用各页 `resetForPlatformSwitch()`（清空输入框、预览、选择态，但保留进行中的批量任务）
+- 解析分流：`DownloadViewModel.parse()` 按模式选解析器；模式与链接不匹配时明确提示，不静默自动切换
+- Cookie 校验：仅抖音模式需要；快手模式设置页 Cookie 区块禁用
+- 存储：沿用 `Movies|Pictures/DouyinDownloader`，文件名兜底 `kuaishou_<id>`，历史/缓存模块无需改动
+
+### 18.6 维护要点
+
+1. `INIT_STATE` 的**顶层键名做过凯撒 +1 移位**（如 `tusjoh.0sftu...`），值仍是标准 JSON。解析按值递归查找，不要依赖键名。
+2. 若页面结构改版：症状是「找不到 photo 节点」→ 先人工抓一次页面确认 `photo` 与 `photoId` 是否还在。
+3. 若解析突然大面积失败：先检查是否被下发验证码页（HTML 无 `INIT_STATE`），再考虑补 Cookie（`KuaishouDownloader(cookie)` 已预留入口）。
+4. 不要为「1080p」去实现 App 端签名：Frida 需 root、MITM 需装证书，均不适合本 App 形态。
+
+---
+
 ## 附录 A：关键文件速查表
 
 | 需求 | 文件 | 关键方法 |
 |------|------|---------|
+| 解析快手作品 | kuaishou/KuaishouDownloader.java | `collectWorkInfo()` |
+| 快手字段映射 | kuaishou/KuaishouPhotoParser.java | `parse(photo, photoIdToken)` |
+| 解析模式读写 | util/PlatformModeManager.java | `getMode()` / `setMode()` |
 | 解析单个作品 | DouyinDownloader.java | `collectWorkInfo()` |
+| 抖音清晰度标注 | DouyinDownloader.java | `buildVideoQualityLabel()` |
 | 解析作者作品 | DouyinDownloader.java | `collectAccountWorksInfo()` |
 | a_bogus 签名 | ABogusGenerator.java | `getValue(query)` |
 | WebSign 签名 | WebSignGenerator.java | `sign(query, uifid, ts)` |

@@ -19,6 +19,8 @@ public class AwemeProfile implements Serializable {
   private final List<String> thumbnailUrls;
   private final List<String> downloadUrls;
   private final List<MediaType> imageMediaTypes;
+  /** 清晰度标注（如 "720p · 30fps"）。抖音作品为空字符串；仅供 UI 如实展示画质。 */
+  private final String qualityLabel;
 
   public AwemeProfile(
       String awemeId,
@@ -85,6 +87,38 @@ public class AwemeProfile implements Serializable {
       List<String> thumbnailUrls,
       List<String> downloadUrls,
       List<MediaType> imageMediaTypes) {
+    this(
+        platform,
+        awemeId,
+        mediaType,
+        desc,
+        createTime,
+        authorNickname,
+        authorSecUserId,
+        authorAvatarUrl,
+        collectionTitle,
+        thumbnailUrl,
+        thumbnailUrls,
+        downloadUrls,
+        imageMediaTypes,
+        "");
+  }
+
+  public AwemeProfile(
+      Platform platform,
+      String awemeId,
+      MediaType mediaType,
+      String desc,
+      long createTime,
+      String authorNickname,
+      String authorSecUserId,
+      String authorAvatarUrl,
+      String collectionTitle,
+      String thumbnailUrl,
+      List<String> thumbnailUrls,
+      List<String> downloadUrls,
+      List<MediaType> imageMediaTypes,
+      String qualityLabel) {
     this.platform = platform == null ? Platform.DOUYIN : platform;
     this.awemeId = awemeId;
     this.mediaType = mediaType;
@@ -100,6 +134,7 @@ public class AwemeProfile implements Serializable {
     this.downloadUrls = downloadUrls == null ? Collections.emptyList() : List.copyOf(downloadUrls);
     this.imageMediaTypes =
         imageMediaTypes == null ? Collections.emptyList() : List.copyOf(imageMediaTypes);
+    this.qualityLabel = qualityLabel == null ? "" : qualityLabel;
   }
 
   public AwemeProfile(
@@ -181,6 +216,11 @@ public class AwemeProfile implements Serializable {
 
   public List<MediaType> imageMediaTypes() {
     return imageMediaTypes;
+  }
+
+  /** 清晰度标注，如 "720p · 30fps"；无可用信息时为空字符串。 */
+  public String qualityLabel() {
+    return qualityLabel;
   }
 
   public MediaType mediaTypeAt(int index) {

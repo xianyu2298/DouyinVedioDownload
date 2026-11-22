@@ -12,6 +12,7 @@ import android.util.Log;
 import com.xianyu.vediodownload.downloader.HttpDownloader;
 import com.xianyu.vediodownload.douyin.AwemeProfile;
 import com.xianyu.vediodownload.douyin.MediaType;
+import com.xianyu.vediodownload.model.Platform;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -36,6 +37,12 @@ public final class DownloaderBridge {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36";
     private static final String DEFAULT_REFERER = "https://www.douyin.com/?recommend=1";
+
+    // 快手 CDN 不校验 Referer/Cookie，但统一的移动端 UA 更贴近真实请求，降低被 CDN 拒绝的概率。
+    private static final String KUAISHOU_USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 13; SM-G991B) "
+                    + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36";
+    private static final String KUAISHOU_REFERER = "https://v.m.chenzhongtech.com/";
 
     public interface ProgressListener {
         void onProgress(int percent, long downloaded, long total);
@@ -103,13 +110,19 @@ public final class DownloaderBridge {
 
         MediaType hintType = overrideType != null ? overrideType : profile.mediaTypeAt(urlIndex);
 
+        // 按平台选择请求头：抖音 CDN 依赖 Cookie + Referer；快手 CDN 无需 Cookie，用移动端 UA 更稳。
+        boolean kuaishou = profile.platform() == Platform.KUAISHOU;
+        String requestUa = kuaishou ? KUAISHOU_USER_AGENT : DEFAULT_USER_AGENT;
+        String requestReferer = kuaishou ? KUAISHOU_REFERER : DEFAULT_REFERER;
+        String requestCookie = kuaishou ? "" : cookie;
+
         String url = profile.downloadUrls().get(urlIndex);
         String authorName = profile.authorNickname();
         String authorPart = (authorName != null && !authorName.isEmpty())
                 ? (sanitizeFileName(authorName) + "_")
                 : "";
         String descPart = profile.desc().isEmpty()
-                ? ("douyin_" + profile.awemeId())
+                ? ((kuaishou ? "kuaishou_" : "douyin_") + profile.awemeId())
                 : profile.desc();
         String baseName = authorPart + descPart;
 
@@ -125,12 +138,13 @@ public final class DownloaderBridge {
 
         try {
             // 下载前先探一次 Content-Type，决定真实类型
-            MediaType realType = probeContentType(url, cookie, hintType);
+            MediaType realType = probeContentType(url, requestUa, requestReferer, requestCookie, hintType);
             ext = (realType == MediaType.VIDEO || realType == MediaType.LIVE_VIDEO)
                     ? ".mp4"
-                    : (ext.contains("png") ? ".png" : ".jpg");
+                    : (ext.contains("webp") ? ".webp" : (ext.contains("png") ? ".png" : ".jpg"));
             filename = baseName + ext;
-            String savedPath = saveToMediaStore(url, filename, realType, cookie, progressListener);
+            String savedPath = saveToMediaStore(
+                    url, filename, realType, requestUa, requestReferer, requestCookie, progressListener);
             Log.d(TAG, "saved " + realType + " to " + savedPath);
             completeListener.onSuccess(savedPath);
         } catch (Throwable t) {
@@ -158,12 +172,13 @@ public final class DownloaderBridge {
      * 我们不能把它降级成普通 VIDEO，必须保留 LIVE_VIDEO 标识以保证写入
      * LivePicturesMovies/ 而不是 Movies/。
      */
-    private MediaType probeContentType(String url, String cookie, MediaType hintType) {
+    private MediaType probeContentType(
+            String url, String userAgent, String referer, String cookie, MediaType hintType) {
         okhttp3.Request request = new okhttp3.Request.Builder()
                 .url(url)
                 .method("HEAD", null)
-                .header("User-Agent", DEFAULT_USER_AGENT)
-                .header("Referer", DEFAULT_REFERER)
+                .header("User-Agent", userAgent)
+                .header("Referer", referer)
                 .header("Accept-Encoding", "identity")
                 .header("Cookie", cookie)
                 .build();
@@ -188,13 +203,15 @@ public final class DownloaderBridge {
     private String saveToMediaStore(String url,
                                     String filename,
                                     MediaType mediaType,
+                                    String userAgent,
+                                    String referer,
                                     String cookie,
                                     ProgressListener progressListener) throws Exception {
-        HttpDownloader httpDownloader = new HttpDownloader(okHttp, DEFAULT_USER_AGENT, DEFAULT_REFERER, cookie);
+        HttpDownloader httpDownloader = new HttpDownloader(okHttp, userAgent, referer, cookie);
         File tmp;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             // Android 10+: 直接写到 MediaStore 输出流
-            return writeToMediaStoreStream(url, filename, mediaType, cookie, progressListener);
+            return writeToMediaStoreStream(url, filename, mediaType, userAgent, referer, cookie, progressListener);
         } else {
             // Android 9-: 写到 cache 目录再复制
             tmp = new File(appContext.getCacheDir(), filename);
@@ -214,6 +231,8 @@ public final class DownloaderBridge {
     private String writeToMediaStoreStream(String url,
                                           String filename,
                                           MediaType mediaType,
+                                          String userAgent,
+                                          String referer,
                                           String cookie,
                                           ProgressListener progressListener) throws Exception {
         Uri itemUri = null;
@@ -254,8 +273,8 @@ public final class DownloaderBridge {
             // 下载请求必须带 Cookie（Bug4 修复），否则 CDN 返回 403
             okhttp3.Request.Builder reqBuilder = new okhttp3.Request.Builder()
                     .url(url)
-                    .header("User-Agent", DEFAULT_USER_AGENT)
-                    .header("Referer", DEFAULT_REFERER)
+                    .header("User-Agent", userAgent)
+                    .header("Referer", referer)
                     .header("Accept-Encoding", "identity");
             if (!TextUtils.isEmpty(cookie)) {
                 reqBuilder.header("Cookie", cookie);

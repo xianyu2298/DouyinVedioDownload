@@ -16,7 +16,7 @@ import com.xianyu.vediodownload.ui.designsystem.theme.LocalGlassTokens
 
 /**
  * 批量下载确认弹窗。
- * 标题"须知"，正文提示抖音风控风险，确定按钮（危险风格）、取消按钮（普通风格）。
+ * 标题"须知"，正文提示平台风控风险，确定按钮（危险风格）、取消按钮（普通风格）。
  * 玻璃卡片外观，按钮风格与软件其它卡片保持一致。
  *
  * 仍然基于 Material3 AlertDialog，仅把它的容器（shape / containerColor）替换成玻璃风外观，
@@ -49,7 +49,7 @@ fun BatchDownloadConfirmDialog(
         },
         text = {
             Text(
-                text = "由于抖音风控，短时间下载大量文件可能会遇到下载不全的情况，推荐进行选择下载，是否继续批量下载？",
+                text = "由于平台风控，短时间下载大量文件可能会遇到下载不全的情况，推荐进行选择下载，是否继续批量下载？",
                 color = tokens.textSecondary,
                 fontSize = 15.sp,
                 lineHeight = 22.sp,

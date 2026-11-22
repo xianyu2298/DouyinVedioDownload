@@ -8,15 +8,19 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -26,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.widget.Toast
 import com.xianyu.vediodownload.R
+import com.xianyu.vediodownload.model.Platform
 import com.xianyu.vediodownload.ui.designsystem.component.*
 import com.xianyu.vediodownload.ui.designsystem.theme.*
 import com.xianyu.vediodownload.util.CacheManager
@@ -46,7 +51,9 @@ private enum class SubPage { HISTORY_HOME, HISTORY_VIDEO, HISTORY_IMAGE, HISTORY
 
 @Composable
 fun SettingsScreen(
-    onNavigateToLogin: () -> Unit
+    onNavigateToLogin: () -> Unit,
+    appMode: Platform = Platform.DOUYIN,
+    onModeChange: (Platform) -> Unit = {},
 ) {
     // 记录从主页到子页的方向：进入子页 slideIn 右进左退，返回时反向。
     var subPage by remember { mutableStateOf<SubPage?>(null) }
@@ -97,6 +104,8 @@ fun SettingsScreen(
                 onNavigateToLogin = onNavigateToLogin,
                 onOpenHistoryHome = { subPage = SubPage.HISTORY_HOME },
                 onOpenLiveCompose = { subPage = SubPage.LIVE_COMPOSE },
+                appMode = appMode,
+                onModeChange = onModeChange,
             )
             SubPage.HISTORY_HOME -> HistoryHomeScreen(
                 onBack = { subPage = null },
@@ -143,6 +152,8 @@ private fun SettingsHomeContent(
     onNavigateToLogin: () -> Unit,
     onOpenHistoryHome: () -> Unit,
     onOpenLiveCompose: () -> Unit,
+    appMode: Platform,
+    onModeChange: (Platform) -> Unit,
 ) {
     val scrollState = rememberScrollState()
     val context = LocalContext.current
@@ -194,6 +205,52 @@ private fun SettingsHomeContent(
             modifier = Modifier.padding(bottom = 24.dp)
         )
 
+        // 解析模式：抖音 / 快手。默认抖音，切换后视频页与图片页按对应平台解析。
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = "解析模式",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = tokens.textPrimary
+            )
+            Text(
+                text = "切换后，视频页与图片页将解析对应平台的链接",
+                fontSize = 12.sp,
+                color = tokens.textSecondary,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                ModePill(
+                    text = "抖音",
+                    selected = appMode != Platform.KUAISHOU,
+                    modifier = Modifier.weight(1f),
+                ) { onModeChange(Platform.DOUYIN) }
+                ModePill(
+                    text = "快手",
+                    selected = appMode == Platform.KUAISHOU,
+                    modifier = Modifier.weight(1f),
+                ) { onModeChange(Platform.KUAISHOU) }
+            }
+
+            if (appMode == Platform.KUAISHOU) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "快手解析无需登录 Cookie；网页端最高仅提供 720p 画质，下载不做二次压缩。",
+                    fontSize = 11.sp,
+                    color = tokens.textTertiary,
+                    lineHeight = 17.sp
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         GlassCard(modifier = Modifier.fillMaxWidth()) {
             Text(
                 text = stringResource(R.string.settings_section_cookie),
@@ -202,7 +259,11 @@ private fun SettingsHomeContent(
                 color = tokens.textPrimary
             )
             Text(
-                text = stringResource(R.string.settings_cookie_desc),
+                text = if (appMode == Platform.KUAISHOU) {
+                    "快手解析无需登录 Cookie，本区块仅在抖音模式下可用"
+                } else {
+                    stringResource(R.string.settings_cookie_desc)
+                },
                 fontSize = 12.sp,
                 color = tokens.textSecondary,
                 modifier = Modifier.padding(top = 8.dp)
@@ -213,7 +274,8 @@ private fun SettingsHomeContent(
             NeumorphicButton(
                 text = stringResource(R.string.btn_auto_login),
                 onClick = onNavigateToLogin,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                enabled = appMode != Platform.KUAISHOU
             )
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -221,7 +283,8 @@ private fun SettingsHomeContent(
             NeumorphicButton(
                 text = stringResource(R.string.btn_set_cookie),
                 onClick = { showCookieDialog = true },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                enabled = appMode != Platform.KUAISHOU
             )
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -229,7 +292,8 @@ private fun SettingsHomeContent(
             NeumorphicButton(
                 text = stringResource(R.string.btn_check_cookie),
                 onClick = { showCheckCookieDialog = true },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                enabled = appMode != Platform.KUAISHOU
             )
         }
 
@@ -464,6 +528,43 @@ private fun SettingsHomeContent(
                     Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                 }
             },
+        )
+    }
+}
+
+/**
+ * 解析模式的分段选项（抖音 / 快手）。
+ *
+ * 用 selectable + Role.RadioButton 而不是普通 clickable，保证无障碍语义正确
+ * （读屏会念出「已选中 / 未选中」）。
+ */
+@Composable
+private fun ModePill(
+    text: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val tokens = LocalGlassTokens.current
+    val accent = Color(0xFF3B82F6)
+    Box(
+        modifier = modifier
+            .height(44.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(if (selected) accent.copy(alpha = 0.16f) else Color.Transparent)
+            .border(
+                width = 1.dp,
+                color = if (selected) accent.copy(alpha = 0.55f) else tokens.textTertiary.copy(alpha = 0.25f),
+                shape = RoundedCornerShape(22.dp)
+            )
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            fontSize = 14.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) accent else tokens.textSecondary
         )
     }
 }

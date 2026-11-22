@@ -27,6 +27,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.ContextCompat
 import com.xianyu.vediodownload.R
 import android.widget.Toast
+import com.xianyu.vediodownload.model.Platform
 import com.xianyu.vediodownload.util.CookieManager
 import com.xianyu.vediodownload.ui.designsystem.component.*
 import com.xianyu.vediodownload.ui.designsystem.theme.*
@@ -34,7 +35,8 @@ import com.xianyu.vediodownload.ui.player.VideoPlayerActivity
 
 @Composable
 fun VideoScreen(
-    viewModel: DownloadViewModel = viewModel()
+    viewModel: DownloadViewModel = viewModel(),
+    appMode: Platform = Platform.DOUYIN
 ) {
     val scrollState = rememberScrollState()
     val uiState by viewModel.uiState.collectAsState()
@@ -79,7 +81,7 @@ fun VideoScreen(
         Spacer(modifier = Modifier.height(48.dp))
 
         Text(
-            text = stringResource(R.string.tab_video),
+            text = if (appMode == Platform.KUAISHOU) "快手视频" else stringResource(R.string.tab_video),
             style = MaterialTheme.typography.headlineMedium,
             color = tokens.textPrimary,
             fontWeight = FontWeight.Bold,
@@ -89,7 +91,11 @@ fun VideoScreen(
         NeumorphicInputField(
             value = uiState.url,
             onValueChange = { viewModel.updateUrl(it) },
-            placeholder = stringResource(R.string.hint_input_url),
+            placeholder = if (appMode == Platform.KUAISHOU) {
+                stringResource(R.string.hint_input_url_kuaishou)
+            } else {
+                stringResource(R.string.hint_input_url)
+            },
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -98,7 +104,8 @@ fun VideoScreen(
             NeumorphicButton(
             text = stringResource(R.string.btn_parse),
             onClick = {
-                if (!cookieManager.isSet()) {
+                // 只有抖音解析依赖登录 Cookie；快手走 H5 分享页，无需登录态
+                if (appMode == Platform.DOUYIN && !cookieManager.isSet()) {
                     Toast.makeText(context, "请先在设置页设置 Cookie", Toast.LENGTH_LONG).show()
                     return@NeumorphicButton
                 }
@@ -153,10 +160,19 @@ fun VideoScreen(
                     authorAvatarUrl = p.authorAvatarUrl,
                     description = p.description,
                     videoUrl = p.videoUrl,
+                    qualityLabel = p.qualityLabel,
                     onPreviewClick = {
                         val intent = Intent(context, VideoPlayerActivity::class.java).apply {
                             putExtra("video_url", p.videoUrl)
                             putExtra("cover_url", p.coverUrl)
+                            putExtra(
+                                "referer",
+                                if (appMode == Platform.KUAISHOU) {
+                                    "https://v.m.chenzhongtech.com/"
+                                } else {
+                                    "https://www.douyin.com/"
+                                }
+                            )
                         }
                         context.startActivity(intent)
                     },

@@ -40,6 +40,7 @@ fun VideoPreviewCard(
     authorAvatarUrl: String = "",
     description: String = "",
     videoUrl: String = "",
+    qualityLabel: String = "",
     onPreviewClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -218,6 +219,17 @@ fun VideoPreviewCard(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 lineHeight = 22.sp
+            )
+        }
+
+        if (qualityLabel.isNotEmpty()) {
+            // 如实标注清晰度（快手网页端上限为 720p），避免用户误以为是原画
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "清晰度 $qualityLabel",
+                fontSize = 12.sp,
+                color = tokens.textTertiary,
+                maxLines = 1
             )
         }
     }

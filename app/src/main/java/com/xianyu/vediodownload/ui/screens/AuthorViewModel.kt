@@ -154,6 +154,29 @@ class AuthorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 切换解析模式时重置页面：清空输入框、作者数据与选择态。
+     *
+     * 与 [DownloadViewModel.resetForPlatformSwitch] 保持一致：
+     * 不动 [AuthorUiState.batch] / [AuthorUiState.compose]，避免打断后台下载与合成。
+     */
+    fun resetForPlatformSwitch() {
+        _uiState.update {
+            it.copy(
+                url = "",
+                isLoading = false,
+                error = null,
+                author = null,
+                works = emptyList(),
+                isSelectionMode = false,
+                selectedIndices = emptySet(),
+                confirmTarget = null,
+                autoComposeLive = false,
+                livePairCount = 0,
+            )
+        }
+    }
+
+    /**
      * 退出作者详情页（由 AuthorScreen 的 BackHandler / GlassTopAppBar 返回键触发）。
      * 清空作者数据 + 选择态，但保留 url 方便用户继续改链接重新解析。
      */

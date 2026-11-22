@@ -18,10 +18,13 @@ import com.xianyu.vediodownload.douyin.exception.AwemeDetailFetchException
 import com.xianyu.vediodownload.douyin.exception.DouyinDownloaderException
 import com.xianyu.vediodownload.douyin.exception.FileDownloadException
 import com.xianyu.vediodownload.douyin.exception.WorkListFetchException
+import com.xianyu.vediodownload.kuaishou.KuaishouDownloader
+import com.xianyu.vediodownload.model.Platform
 import com.xianyu.vediodownload.util.CookieManager
 import com.xianyu.vediodownload.util.DownloaderBridge
 import com.xianyu.vediodownload.util.ForegroundDownloadNotifier
 import com.xianyu.vediodownload.util.LivePhotoMaker
+import com.xianyu.vediodownload.util.PlatformModeManager
 import com.xianyu.vediodownload.util.looksLikeDouyinShareLink
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -53,7 +56,8 @@ data class MediaPreview(
     val videoUrl: String = "",
     val imageUrls: String = "",   // 图片URL列表，用 ||| 分隔
     val liveVideoUrls: String = "",  // Live图视频URL列表，用 ||| 分隔
-    val liveCoverUrls: String = ""    // Live图封面URL列表，用 ||| 分隔
+    val liveCoverUrls: String = "",   // Live图封面URL列表，用 ||| 分隔
+    val qualityLabel: String = ""     // 清晰度标注（"720p · 30fps"），快手作品如实展示
 )
 
 /**
@@ -151,6 +155,34 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(url = url, error = null) }
     }
 
+    /**
+     * 切换解析模式时重置页面：清空输入框、预览与选择状态。
+     *
+     * 必须连输入框一起清空——否则抖音链接会残留在快手模式里，
+     * 用户点解析会得到「模式与链接不匹配」的提示，体验割裂。
+     *
+     * 注意：不动 [DownloadUiState.batch] / [DownloadUiState.compose]，
+     * 保证切换模式不会打断正在后台进行的下载或合成任务。
+     */
+    fun resetForPlatformSwitch() {
+        cachedProfile = null
+        _uiState.update {
+            it.copy(
+                url = "",
+                preview = null,
+                error = null,
+                isLoading = false,
+                loadingMessage = "正在解析...",
+                isVideo = false,
+                isImage = false,
+                isLivePhoto = false,
+                isSelectionMode = false,
+                selectedImageIndices = emptySet(),
+                selectedLiveIndices = emptySet(),
+            )
+        }
+    }
+
     fun parse() {
         val url = _uiState.value.url.trim()
         if (url.isEmpty()) {
@@ -158,21 +190,43 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
             return
         }
 
-        // 预校验：看起来不像抖音分享链接就直接提示，避免发起网络请求后失败
-        if (!looksLikeDouyinShareLink(url)) {
-            _uiState.update {
-                it.copy(
-                    isLoading = false,
-                    error = "链接格式不正确，请粘贴完整的抖音分享文案或链接"
-                )
+        val mode = PlatformModeManager(getApplication()).getMode()
+        val kuaishouMode = mode == Platform.KUAISHOU
+
+        if (kuaishouMode) {
+            // 快手模式：只接受快手链接。链接与模式不匹配时明确提示，不做静默自动切换。
+            if (!KuaishouDownloader.containsKuaishouLink(url)) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = "当前为快手模式，请粘贴快手分享链接；如需解析抖音链接，请到设置页切换为抖音模式"
+                    )
+                }
+                return
             }
-            return
+        } else {
+            // 抖音模式：预校验 + Cookie 校验，避免发起注定失败的请求
+            if (!looksLikeDouyinShareLink(url)) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = "链接格式不正确，请粘贴完整的抖音分享文案或链接"
+                    )
+                }
+                return
+            }
+            if (!cookieManager.isSet()) {
+                _uiState.update {
+                    it.copy(isLoading = false, error = "请先在设置页设置抖音 Cookie")
+                }
+                return
+            }
         }
 
         _uiState.update {
             it.copy(
                 isLoading = true,
-                loadingMessage = "正在解析...",
+                loadingMessage = if (kuaishouMode) "正在解析快手作品..." else "正在解析...",
                 error = null,
                 preview = null,
             )
@@ -180,10 +234,13 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
 
         viewModelScope.launch {
             try {
-                val cookie = cookieManager.getCookie()
                 val profile = withContext(Dispatchers.IO) {
-                    val downloader = DouyinDownloader(cookie)
-                    downloader.collectWorkInfo(url)
+                    if (kuaishouMode) {
+                        // 快手当前解析路径不需要登录态，Cookie 仅作风控兜底预留
+                        KuaishouDownloader().collectWorkInfo(url)
+                    } else {
+                        DouyinDownloader(cookieManager.getCookie()).collectWorkInfo(url)
+                    }
                 }
 
                 cachedProfile = profile
@@ -194,16 +251,16 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                 val imageUrls = mutableListOf<String>()
                 val videoUrls = mutableListOf<String>()
 
-                profile.downloadUrls().forEachIndexed { index, url ->
+                profile.downloadUrls().forEachIndexed { index, itemUrl ->
                     if (index < profile.imageMediaTypes().size) {
                         val type = profile.imageMediaTypes()[index]
                         if (type == MediaType.VIDEO) {
-                            videoUrls.add(url)
+                            videoUrls.add(itemUrl)
                         } else {
-                            imageUrls.add(url)
+                            imageUrls.add(itemUrl)
                         }
                     } else {
-                        imageUrls.add(url)
+                        imageUrls.add(itemUrl)
                     }
                 }
 
@@ -219,7 +276,8 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                     videoUrl = if (mediaType == MediaType.VIDEO) profile.downloadUrls()[0] else "",
                     imageUrls = imageUrls.joinToString("|||"),
                     liveVideoUrls = videoUrls.joinToString("|||"),
-                    liveCoverUrls = imageUrls.joinToString("|||")  // Live图的封面就是静态图片
+                    liveCoverUrls = imageUrls.joinToString("|||"),  // Live图的封面就是静态图片
+                    qualityLabel = profile.qualityLabel()
                 )
 
                 _uiState.update {
@@ -245,18 +303,30 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                         error = resolveErrorMessage(e, forWorkList = true)
                     )
                 }
-            } catch (e: IllegalArgumentException) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = "链接格式不正确，请粘贴完整的抖音分享文案或链接"
-                    )
-                }
             } catch (e: FileDownloadException) {
                 _uiState.update {
                     it.copy(
                         isLoading = false,
                         error = "作品数据缺失，请换个链接重试"
+                    )
+                }
+            } catch (e: DouyinDownloaderException) {
+                // 快手解析器复用同一套异常体系（含 FailReason），因此统一按 reason 映射文案
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = resolveErrorMessage(e, forWorkList = false)
+                    )
+                }
+            } catch (e: IllegalArgumentException) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = if (kuaishouMode) {
+                            "快手链接格式不正确，请粘贴完整的分享文案或链接"
+                        } else {
+                            "链接格式不正确，请粘贴完整的抖音分享文案或链接"
+                        }
                     )
                 }
             } catch (e: Exception) {

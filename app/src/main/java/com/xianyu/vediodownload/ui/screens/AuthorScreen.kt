@@ -79,6 +79,7 @@ import coil.compose.AsyncImage
 import com.xianyu.vediodownload.R
 import com.xianyu.vediodownload.douyin.AwemeProfile
 import com.xianyu.vediodownload.douyin.MediaType
+import com.xianyu.vediodownload.model.Platform
 import com.xianyu.vediodownload.ui.designsystem.component.AuthorHeaderCard
 import com.xianyu.vediodownload.ui.designsystem.component.GlassCard
 import com.xianyu.vediodownload.ui.designsystem.component.GlassTopAppBar
@@ -105,8 +106,19 @@ import com.xianyu.vediodownload.util.CookieManager
 )
 @Composable
 fun AuthorScreen(
-    viewModel: AuthorViewModel = viewModel()
+    viewModel: AuthorViewModel = viewModel(),
+    appMode: Platform = Platform.DOUYIN
 ) {
+    // 快手作者作品列表依赖登录态 GraphQL + 请求签名，本期未接入
+    if (appMode == Platform.KUAISHOU) {
+        KuaishouUnsupportedNotice(
+            title = "作者主页",
+            featureName = "作者主页批量下载",
+            reason = "快手作者作品列表需要登录态 GraphQL 接口与请求签名，当前版本未接入该链路。",
+        )
+        return
+    }
+
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val cookieManager = remember { CookieManager(context.applicationContext) }
@@ -415,9 +427,9 @@ private fun AuthorBatchConfirmDialog(
     val tokens = LocalGlassTokens.current
 
     val (title, body) = when (target) {
-        "all" -> "提示" to "作者共有 $totalWorks 个作品，批量下载可能因抖音风控导致下载不全或失败，建议选择下载少量作品，是否继续下载全部？"
-        "video" -> "提示" to "批量下载视频可能因抖音风控导致下载不全或失败，建议选择下载少量作品，是否继续仅下载视频？"
-        "selected" -> "提示" to "批量下载 $selectedCount 个作品可能因抖音风控导致部分失败，是否继续？"
+        "all" -> "提示" to "作者共有 $totalWorks 个作品，批量下载可能因平台风控导致下载不全或失败，建议选择下载少量作品，是否继续下载全部？"
+        "video" -> "提示" to "批量下载视频可能因平台风控导致下载不全或失败，建议选择下载少量作品，是否继续仅下载视频？"
+        "selected" -> "提示" to "批量下载 $selectedCount 个作品可能因平台风控导致部分失败，是否继续？"
         else -> "提示" to "是否继续下载？"
     }
 

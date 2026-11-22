@@ -67,6 +67,8 @@ class VideoPlayerActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         val videoUrl = intent.getStringExtra("video_url") ?: ""
+        // 参考来源页按平台传入：抖音 CDN 校验 Referer，快手 CDN 不校验
+        val referer = intent.getStringExtra("referer") ?: "https://www.douyin.com/"
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -82,6 +84,7 @@ class VideoPlayerActivity : AppCompatActivity() {
         setContent {
             VideoPlayerContent(
                 videoUrl = videoUrl,
+                referer = referer,
                 onAttachPlayer = { player = it },
                 onFinish = { finish() }
             )
@@ -103,6 +106,7 @@ private const val DEFAULT_UA =
 @Composable
 private fun VideoPlayerContent(
     videoUrl: String,
+    referer: String,
     onAttachPlayer: (ExoPlayer?) -> Unit,
     onFinish: () -> Unit
 ) {
@@ -110,7 +114,7 @@ private fun VideoPlayerContent(
     var showTopBar by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    val player = remember(videoUrl) {
+    val player = remember(videoUrl, referer) {
         if (videoUrl.isEmpty()) {
             errorMessage = "无法获取视频链接"
             null
@@ -121,7 +125,7 @@ private fun VideoPlayerContent(
                     .setAllowCrossProtocolRedirects(true)
                     .setDefaultRequestProperties(
                         mapOf(
-                            "Referer" to "https://www.douyin.com/",
+                            "Referer" to referer,
                             "User-Agent" to DEFAULT_UA
                         )
                     )

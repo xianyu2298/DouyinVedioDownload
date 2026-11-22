@@ -15,7 +15,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.xianyu.vediodownload.model.Platform
 import com.xianyu.vediodownload.util.CookieManager
+import com.xianyu.vediodownload.util.PlatformModeManager
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -79,6 +81,9 @@ fun MainScreen(
     val tokens = LocalGlassTokens.current
     val application = LocalContext.current.applicationContext as Application
     val cookieManager = remember { CookieManager(application) }
+    val modeManager = remember(application) { PlatformModeManager(application) }
+    // 全局解析模式：抖音（默认）/ 快手，由设置页切换，持久化在 app_prefs
+    var appMode by remember { mutableStateOf(modeManager.getMode()) }
 
     var showDisclaimer by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -153,11 +158,25 @@ fun MainScreen(
             }
         ) { page ->
             when (page) {
-                0 -> VideoScreen(viewModel = videoViewModel)
-                1 -> ImageScreen(viewModel = imageViewModel)
-                2 -> LiveScreen(viewModel = liveViewModel)
-                3 -> AuthorScreen(viewModel = authorViewModel)
-                4 -> SettingsScreen(onNavigateToLogin = onNavigateToLogin)
+                0 -> VideoScreen(viewModel = videoViewModel, appMode = appMode)
+                1 -> ImageScreen(viewModel = imageViewModel, appMode = appMode)
+                2 -> LiveScreen(viewModel = liveViewModel, appMode = appMode)
+                3 -> AuthorScreen(viewModel = authorViewModel, appMode = appMode)
+                4 -> SettingsScreen(
+                    onNavigateToLogin = onNavigateToLogin,
+                    appMode = appMode,
+                    onModeChange = { newMode ->
+                        if (newMode != appMode) {
+                            modeManager.setMode(newMode)
+                            appMode = newMode
+                            // 切换模式后清空输入框与预览，避免上一平台的链接/内容残留
+                            videoViewModel.resetForPlatformSwitch()
+                            imageViewModel.resetForPlatformSwitch()
+                            liveViewModel.resetForPlatformSwitch()
+                            authorViewModel.resetForPlatformSwitch()
+                        }
+                    }
+                )
             }
         }
 

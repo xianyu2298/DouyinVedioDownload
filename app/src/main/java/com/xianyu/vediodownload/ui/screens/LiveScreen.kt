@@ -41,6 +41,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.xianyu.vediodownload.R
 import android.widget.Toast
+import com.xianyu.vediodownload.model.Platform
 import com.xianyu.vediodownload.util.CookieManager
 import com.xianyu.vediodownload.ui.designsystem.component.*
 import com.xianyu.vediodownload.ui.designsystem.theme.*
@@ -49,8 +50,19 @@ import com.xianyu.vediodownload.ui.player.VideoPlayerActivity
 
 @Composable
 fun LiveScreen(
-    viewModel: DownloadViewModel = viewModel()
+    viewModel: DownloadViewModel = viewModel(),
+    appMode: Platform = Platform.DOUYIN
 ) {
+    // 快手作品没有「静态封面 + 动态短片」的 Live 结构，本页在快手模式下不可用
+    if (appMode == Platform.KUAISHOU) {
+        KuaishouUnsupportedNotice(
+            title = "Live 实况图",
+            featureName = "Live 实况图",
+            reason = "快手作品不具备「静态封面 + 动态短片」的 Live 结构，无法按本页逻辑解析与合成。",
+        )
+        return
+    }
+
     val scrollState = rememberScrollState()
     val uiState by viewModel.uiState.collectAsState()
     val focusManager = LocalFocusManager.current

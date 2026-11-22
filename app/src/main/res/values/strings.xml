@@ -12,6 +12,7 @@
 
     <!-- 主界面文字 -->
     <string name="hint_input_url">请粘贴抖音分享链接</string>
+    <string name="hint_input_url_kuaishou">请粘贴快手分享链接</string>
     <string name="btn_parse">解析</string>
     <string name="btn_set_cookie">手动设置Cookie</string>
     <string name="btn_auto_login">自动获取Cookie（推荐）</string>

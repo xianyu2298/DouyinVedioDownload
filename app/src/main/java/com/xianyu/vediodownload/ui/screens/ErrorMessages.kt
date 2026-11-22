@@ -15,13 +15,13 @@ fun resolveErrorMessage(e: DouyinDownloaderException, forWorkList: Boolean): Str
             "网络连接失败，请检查网络或稍后重试"
 
         FailReason.RISK_CONTROL ->
-            "请求被抖音风控拦截（可能是网络 IP 被限制），请尝试切换网络后重试"
+            "请求被平台风控拦截（可能是网络 IP 被限制），请尝试切换网络后重试"
 
         FailReason.SIGNATURE_INVALID ->
             "签名校验失败，软件解析算法可能需要更新，请更新到最新版本"
 
         FailReason.COOKIE_MISSING ->
-            "Cookie 缺失或不完整，请在「设置」页重新获取 Cookie（需包含 msToken / uifid）"
+            "Cookie 缺失或不完整，请在「设置」页重新获取 Cookie（需包含 sessionid / uifid / ttwid）"
 
         FailReason.WORK_NOT_FOUND ->
             if (forWorkList) "该作者暂无作品或作品不可见" else "该作品可能已删除、设为私密或所在地区不可访问"

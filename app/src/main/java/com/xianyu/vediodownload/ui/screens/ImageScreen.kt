@@ -45,6 +45,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.xianyu.vediodownload.R
 import android.widget.Toast
+import com.xianyu.vediodownload.model.Platform
 import com.xianyu.vediodownload.util.CookieManager
 import com.xianyu.vediodownload.ui.designsystem.component.*
 import com.xianyu.vediodownload.ui.designsystem.theme.*
@@ -52,7 +53,8 @@ import com.xianyu.vediodownload.ui.player.ImagePreviewActivity
 
 @Composable
 fun ImageScreen(
-    viewModel: DownloadViewModel = viewModel()
+    viewModel: DownloadViewModel = viewModel(),
+    appMode: Platform = Platform.DOUYIN
 ) {
     val scrollState = rememberScrollState()
     val uiState by viewModel.uiState.collectAsState()
@@ -151,7 +153,7 @@ fun ImageScreen(
             }
         } else {
             Text(
-                text = stringResource(R.string.tab_image),
+                text = if (appMode == Platform.KUAISHOU) "快手图片" else stringResource(R.string.tab_image),
                 style = MaterialTheme.typography.headlineMedium,
                 color = tokens.textPrimary,
                 fontWeight = FontWeight.Bold,
@@ -163,7 +165,11 @@ fun ImageScreen(
             NeumorphicInputField(
                 value = uiState.url,
                 onValueChange = { viewModel.updateUrl(it) },
-                placeholder = stringResource(R.string.hint_input_url),
+                placeholder = if (appMode == Platform.KUAISHOU) {
+                    stringResource(R.string.hint_input_url_kuaishou)
+                } else {
+                    stringResource(R.string.hint_input_url)
+                },
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -172,7 +178,8 @@ fun ImageScreen(
             NeumorphicButton(
                 text = stringResource(R.string.btn_parse),
                 onClick = {
-                    if (!cookieManager.isSet()) {
+                    // 仅抖音需要登录 Cookie；快手图集走 H5 分享页，匿名即可解析
+                    if (appMode == Platform.DOUYIN && !cookieManager.isSet()) {
                         Toast.makeText(context, "请先在设置页设置 Cookie", Toast.LENGTH_LONG).show()
                         return@NeumorphicButton
                     }

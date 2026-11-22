@@ -430,6 +430,7 @@ public final class DouyinDownloader {
     List<String> thumbnailUrls;
     List<String> downloadUrls;
     List<MediaType> imageMediaTypes;
+    String qualityLabel = "";
 
     if (mediaType == MediaType.IMAGE) {
       ImageAssetCollection imageAssets = collectImageAssets(aweme);
@@ -443,10 +444,13 @@ public final class DouyinDownloader {
       thumbnailUrls = collectThumbnailUrls(aweme);
       downloadUrls = collectVideoUrlCandidates(aweme);
       imageMediaTypes = List.of();
+      // 与下载候选同源同序：显示哪一档，实际就下载哪一档
+      qualityLabel = buildVideoQualityLabel(aweme);
     }
     String thumbnailUrl = thumbnailUrls.isEmpty() ? "" : thumbnailUrls.get(0);
 
     return new AwemeProfile(
+        com.xianyu.vediodownload.model.Platform.DOUYIN,
         awemeId,
         mediaType,
         desc,
@@ -458,7 +462,8 @@ public final class DouyinDownloader {
         thumbnailUrl,
         thumbnailUrls,
         downloadUrls,
-        imageMediaTypes);
+        imageMediaTypes,
+        qualityLabel);
   }
 
   private String resolveSecUserId(String sourceText, String resolvedUrl, String cookie)
@@ -1439,48 +1444,12 @@ public final class DouyinDownloader {
   private List<String> collectVideoUrlCandidates(JsonNode aweme) {
     LinkedHashSet<String> urls = new LinkedHashSet<>();
     LinkedHashSet<String> playUris = new LinkedHashSet<>();
-    List<VideoCandidate> qualityCandidates = new ArrayList<>();
 
-    JsonNode bitRates = aweme.path("video").path("bit_rate");
-    if (bitRates.isArray()) {
-      for (JsonNode bitRate : bitRates) {
-        JsonNode playAddr = bitRate.path("play_addr");
-        Optional<String> url = pickLastUrl(playAddr.path("url_list"));
-        if (url.isEmpty()) {
-          continue;
-        }
-        playUris.add(playAddr.path("uri").asText("").trim());
-        qualityCandidates.add(
-            new VideoCandidate(
-                playAddr.path("height").asInt(-1),
-                playAddr.path("width").asInt(-1),
-                bitRate.path("FPS").asInt(-1),
-                bitRate.path("bit_rate").asInt(-1),
-                playAddr.path("data_size").asLong(-1),
-                url.get()));
-      }
-    }
-
-    qualityCandidates.sort(
-        (a, b) -> {
-          int cmp =
-              Integer.compare(Math.max(b.height, b.width), Math.max(a.height, a.width));
-          if (cmp != 0) {
-            return cmp;
-          }
-          cmp = Integer.compare(b.fps, a.fps);
-          if (cmp != 0) {
-            return cmp;
-          }
-          cmp = Integer.compare(b.bitRate, a.bitRate);
-          if (cmp != 0) {
-            return cmp;
-          }
-          return Long.compare(b.dataSize, a.dataSize);
-        });
-
-    for (VideoCandidate candidate : qualityCandidates) {
+    for (VideoCandidate candidate : collectVideoCandidates(aweme)) {
       urls.add(candidate.url);
+      if (!candidate.playUri.isEmpty()) {
+        playUris.add(candidate.playUri);
+      }
     }
 
     appendUrlListCandidates(urls, aweme.path("video").path("play_addr").path("url_list"));
@@ -1495,6 +1464,96 @@ public final class DouyinDownloader {
 
     return new ArrayList<>(urls);
   }
+
+  /**
+   * 收集 {@code video.bit_rate[]} 的可下载候选，并按画质排序：
+   * 分辨率 → 帧率 → 码率 → 体积（与快手 {@link com.xianyu.vediodownload.kuaishou.KuaishouDownloader}
+   * 的排序规则保持一致）。
+   *
+   * <p>抽成独立方法是为了让「候选链」和「清晰度标注」共用同一套筛选与排序逻辑，
+   * 避免两处规则漂移导致「显示 1080p 却下了 720p」这类不一致。
+   */
+  private List<VideoCandidate> collectVideoCandidates(JsonNode aweme) {
+    List<VideoCandidate> candidates = new ArrayList<>();
+    JsonNode bitRates = aweme.path("video").path("bit_rate");
+    if (bitRates.isArray()) {
+      for (JsonNode bitRate : bitRates) {
+        JsonNode playAddr = bitRate.path("play_addr");
+        Optional<String> url = pickLastUrl(playAddr.path("url_list"));
+        if (url.isEmpty()) {
+          continue;
+        }
+        candidates.add(
+            new VideoCandidate(
+                playAddr.path("height").asInt(-1),
+                playAddr.path("width").asInt(-1),
+                bitRate.path("FPS").asInt(-1),
+                bitRate.path("bit_rate").asInt(-1),
+                playAddr.path("data_size").asLong(-1),
+                url.get(),
+                playAddr.path("uri").asText("").trim()));
+      }
+    }
+    candidates.sort(VIDEO_CANDIDATE_ORDER);
+    return candidates;
+  }
+
+  /**
+   * 生成清晰度标注，如 {@code "1080p · 60fps"}。
+   *
+   * <p>分辨率取「短边」命名（1080×1920 记作 1080p），与业界惯例及快手侧质量档命名一致。
+   * 无任何尺寸信息时返回空串，不做猜测。
+   */
+  private String buildVideoQualityLabel(JsonNode aweme) {
+    List<VideoCandidate> candidates = collectVideoCandidates(aweme);
+    int width;
+    int height;
+    int fps;
+    if (!candidates.isEmpty()) {
+      VideoCandidate best = candidates.get(0);
+      width = best.width;
+      height = best.height;
+      fps = best.fps;
+    } else {
+      JsonNode playAddr = aweme.path("video").path("play_addr");
+      width = playAddr.path("width").asInt(0);
+      height = playAddr.path("height").asInt(0);
+      fps = 0;
+    }
+    int shortSide = Math.min(width, height);
+    if (shortSide <= 0) {
+      // bit_rate 里偶发缺失尺寸字段，回落到 video.play_addr / video 顶层尺寸
+      JsonNode video = aweme.path("video");
+      shortSide =
+          Math.min(video.path("play_addr").path("width").asInt(0),
+              video.path("play_addr").path("height").asInt(0));
+      if (shortSide <= 0) {
+        shortSide = Math.min(video.path("width").asInt(0), video.path("height").asInt(0));
+      }
+    }
+    if (shortSide <= 0) {
+      return fps > 0 ? (fps + "fps") : "";
+    }
+    String resolution = shortSide + "p";
+    return fps > 0 ? (resolution + " · " + fps + "fps") : resolution;
+  }
+
+  private static final java.util.Comparator<VideoCandidate> VIDEO_CANDIDATE_ORDER =
+      (a, b) -> {
+        int cmp = Integer.compare(Math.max(b.height, b.width), Math.max(a.height, a.width));
+        if (cmp != 0) {
+          return cmp;
+        }
+        cmp = Integer.compare(b.fps, a.fps);
+        if (cmp != 0) {
+          return cmp;
+        }
+        cmp = Integer.compare(b.bitRate, a.bitRate);
+        if (cmp != 0) {
+          return cmp;
+        }
+        return Long.compare(b.dataSize, a.dataSize);
+      };
 
   private void appendPlayApiCandidates(LinkedHashSet<String> urls, String playUri) {
     if (playUri == null || playUri.trim().isEmpty()) {
@@ -1704,13 +1763,16 @@ public final class DouyinDownloader {
     final int bitRate;
     final long dataSize;
     final String url;
-    VideoCandidate(int height, int width, int fps, int bitRate, long dataSize, String url) {
+    final String playUri;
+    VideoCandidate(
+        int height, int width, int fps, int bitRate, long dataSize, String url, String playUri) {
       this.height = height;
       this.width = width;
       this.fps = fps;
       this.bitRate = bitRate;
       this.dataSize = dataSize;
       this.url = url;
+      this.playUri = playUri == null ? "" : playUri;
     }
   }
 }
