@@ -89,12 +89,14 @@ object FFmpegUtils {
     }
 
     /**
-     * 使用 Android MediaCodec/MediaMuxer 将视频编码为 MP4 (H.264 + AAC)
+     * 使用 Android MediaExtractor/MediaMuxer 将视频重新封装为 MP4（**不改编码**）
      *
-     * @param crf 质量参数（20-28）。映射为 H.264 的码率：
-     *              crf <=20 -> 5Mbps, 23->3Mbps, 26->1.5Mbps, 28->1Mbps
-     * @param audioBitrate 音频比特率 (如 "128k")
-     * @param maxHeight 最大高度（缩放，仅降采样）。null 保持原始。
+     * 支持 H.264 / HEVC / MPEG-4 Part 2 直通；本工程的 ffmpeg-kit 未编译 libx264，
+     * 无法软转码，因此这里只做容器规范化。
+     *
+     * @param crf 质量参数（当前实现不生效，留作将来接重编码）
+     * @param audioBitrate 音频比特率（当前实现不生效，非 AAC 音轨会被丢弃）
+     * @param maxHeight 最大高度（当前实现不生效）
      */
     fun encodeToMp4(
         context: Context,

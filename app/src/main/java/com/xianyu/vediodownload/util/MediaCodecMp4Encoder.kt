@@ -12,16 +12,31 @@ import java.nio.ByteBuffer
 /**
  * 将视频重新封装为 MP4（remux），不改编码格式。
  *
- * 适用场景：源视频已经是 H.264 + AAC（如抖音下载的视频），
+ * 适用场景：源视频已经是 MP4 可封装的编码（H.264 / HEVC / MPEG-4 Part 2），
  *         仅需要把容器格式标准化为 Motion Photo 兼容的 MP4。
  *
  * 优势：速度极快（无解码/编码），无画质损失。
  *
- * 限制：如果源是 HEVC/AV1/VP9，本函数会返回 false，调用方应走完整转码流程。
+ * 限制：VP9 / AV1 等 MP4 不通用或 MediaMuxer 不支持的编码会返回 false。
+ *      本工程的 ffmpeg-kit 未编译 libx264，无法软转码，故不走重编码兜底。
  */
 object MediaCodecMp4Encoder {
 
     private const val TAG = "Mp4Encoder"
+
+    /**
+     * 允许原样封装进 MP4 的视频编码。
+     *
+     * HEVC 从 API 24 起可由 MediaMuxer 写入 MP4，相册端（三星 / 谷歌）也能硬解，
+     * 因此不再像早期版本那样只放行 H.264 —— 否则 HEVC 源会直接合成失败。
+     */
+    private val PASS_THROUGH_MIMES = setOf("video/avc", "video/hevc", "video/mp4v-es")
+
+    /**
+     * 该视频编码能否直通封装（UI 预检与编码器共用同一份白名单，避免两处判断不一致）
+     */
+    fun isCodecSupported(mime: String?): Boolean =
+        mime != null && mime.lowercase() in PASS_THROUGH_MIMES
 
     /**
      * @param inputPath 输入视频路径
@@ -63,15 +78,14 @@ object MediaCodecMp4Encoder {
             val videoMime = extractor.getTrackFormat(videoTrackIdx)
                 .getString(MediaFormat.KEY_MIME) ?: ""
 
-            // 检查是否需要重新编码（非 H.264 视频）
-            val needsTranscode = !videoMime.contains("avc", ignoreCase = true)
-            if (needsTranscode) {
-                Log.w(TAG, "source video codec is $videoMime, not AVC. Remux requires H.264.")
-                Log.e(TAG, "non-H.264 video not supported in current build")
+            // 编码白名单：只要 MediaMuxer 能封装进 MP4、相册能解码，就允许原样直通。
+            // 早期版本只放行 H.264，会导致 HEVC 源在合成阶段直接失败。
+            if (!isCodecSupported(videoMime)) {
+                Log.e(TAG, "video codec $videoMime not in pass-through whitelist, abort remux")
                 return false
             }
 
-            Log.i(TAG, "remux mode: H.264 passthrough")
+            Log.i(TAG, "remux mode: $videoMime passthrough")
 
             // 总时长
             val durationUs = try {
@@ -102,23 +116,21 @@ object MediaCodecMp4Encoder {
             val outVideoIdx = muxer.addTrack(videoFormat)
             Log.i(TAG, "video track added, mime=$videoMime, idx=$outVideoIdx")
 
-            // 添加音频轨（如果存在）
+            // 添加音频轨（如果存在）。不按编码过滤：能封装就原样带上，
+            // 只有 MediaMuxer 明确拒绝该编码时才降级为无音轨（并在日志里留痕）。
             var outAudioIdx = -1
             if (audioTrackIdx >= 0) {
                 extractor.selectTrack(audioTrackIdx)
                 val audioFormat = extractor.getTrackFormat(audioTrackIdx)
                 val audioMime = audioFormat.getString(MediaFormat.KEY_MIME) ?: ""
-                Log.i(TAG, "audio track mime=$audioMime")
-
-                // 检查音频是否 AAC，如果不是 AAC 则跳过音频
-                if (audioMime.contains("aac", ignoreCase = true) ||
-                    audioMime.contains("mp4a-latm", ignoreCase = true)
-                ) {
-                    outAudioIdx = muxer.addTrack(audioFormat)
-                    Log.i(TAG, "audio track added, idx=$outAudioIdx")
-                } else {
-                    Log.w(TAG, "audio codec $audioMime not AAC, skipping audio")
+                outAudioIdx = try {
+                    muxer.addTrack(audioFormat).also {
+                        Log.i(TAG, "audio track added, mime=$audioMime, idx=$it")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "muxer rejected audio mime=$audioMime, fallback to no-audio", e)
                     extractor.unselectTrack(audioTrackIdx)
+                    -1
                 }
             }
 

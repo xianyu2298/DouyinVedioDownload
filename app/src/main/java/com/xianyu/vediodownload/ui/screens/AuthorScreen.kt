@@ -474,7 +474,7 @@ private fun AuthorBatchConfirmDialog(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "下载完成后自动合成 Live 图（封面+短片，H.264 直通约 1 秒/张）",
+                            text = "下载完成后自动合成 Live 图（封面+短片，原编码直通约 1 秒/张）",
                             color = tokens.textSecondary,
                             fontSize = 13.sp,
                             lineHeight = 18.sp,

@@ -526,11 +526,14 @@ doDownload()：
 - 时间戳固定 `1000000`（1 秒），与参考实现 live-photo-conv 一致；三星原机文件用 `-1`，两者都能识别，无需改动。
 - **仍未对齐参考实现的差异**（用户要求暂缓，若三星仍不识别按此顺序排查）：主图 `Container:Item` 多了 `Item:Length="0"` / `Item:Padding="0"`；XMP APP1 段插在 APP0(JFIF) 之前且无 `<?xpacket?>` 包裹；内嵌 MP4 非 faststart（moov 在尾部，参考在头部）。
 
-### 10.3 视频转码（FFmpegUtils + MediaCodecMp4Encoder）
+### 10.3 视频重封装（FFmpegUtils + MediaCodecMp4Encoder）
 
 由于打包的 ffmpeg-kit 禁用了 mediacodec 和 libx264：
 - **抽帧**：走 ffmpeg（`-vf select`），失败回退 `MediaMetadataRetriever`
-- **转码**：走 Android 原生 `MediaCodec`/`MediaMuxer`（`MediaCodecMp4Encoder.encode()`），实际是 **remux**（H.264 passthrough，极快无画质损失）
+- **重封装**：走 Android 原生 `MediaExtractor`/`MediaMuxer`（`MediaCodecMp4Encoder.encode()`），**原编码直通**，极快无画质损失
+- **直通白名单**：`video/avc`、`video/hevc`、`video/mp4v-es`。早期版本只放行 H.264，导致 HEVC 源在合成阶段直接失败（2026-11-28 修复）
+- **音频**：不再按编码过滤，原音轨直通；只有 MediaMuxer 明确拒绝该编码时才降级为无音轨（`Log.w` 留痕）
+- 非白名单编码（VP9 / AV1）无法处理：本工程没有可用的编码器，不做重编码兜底
 
 ### 10.4 质量预设
 
@@ -755,6 +758,25 @@ fetchAwemeDetail try: ...
 ---
 
 ## 17. 变更记录
+
+### 2026-11-28（补）：Live 图支持 HEVC 等非 H.264 源
+
+**症状**：部分作品合成 Live 图失败——源视频是 HEVC 时整对直接失败。
+
+**根因**：`MediaCodecMp4Encoder.encode()` 里 `!videoMime.contains("avc")` 即 `return false`，只放行 H.264。这是当初因 ffmpeg-kit 无 libx264 而加的保护，白名单过严。对照参考实现：live-photo-conv **完全不做转码**，把视频字节原样追加到 JPEG 后（ffmpeg 只用来抽封面帧），所以「什么编码都能合成」。
+
+**改动**：改为白名单直通 `video/avc` / `video/hevc` / `video/mp4v-es`；仍用 MediaMuxer 重封装而非字节追加，保证容器规范（避免“能合成但播不了”）。VP9 / AV1 仍不支持——本工程无可用编码器。
+
+**注意（易漏点）**：编码判断有两处，只改一处会「日志已放行、UI 仍报非 H.264」：
+
+1. `MediaCodecMp4Encoder.encode()` —— 真正干活的拦截
+2. `LivePhotoComposeViewModel.checkVideoCodec()` —— 合成页的 UI 预检，原来独立写着 `!mime.contains("avc")` 并弹出「该视频非 H.264 编码」
+
+现已统一为 `MediaCodecMp4Encoder.isCodecSupported(mime)` 单一来源。**以后改编码支持范围，只改白名单一处。**
+
+**同时修掉**：原音轨不再按 AAC 过滤，非 AAC（如 Opus）也走直通；MediaMuxer 拒绝时才降级为无音轨。
+
+**验证**：编译通过；需真机验证 HEVC 源合成后在三星 / 谷歌相册可正常播放。
 
 ### 2026-11-28：Live 图三星相册识别修复（补 MicroVideo 旧标准）
 

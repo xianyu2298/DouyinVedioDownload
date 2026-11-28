@@ -16,6 +16,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.xianyu.vediodownload.util.LivePhotoMaker
+import com.xianyu.vediodownload.util.MediaCodecMp4Encoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -226,6 +227,11 @@ class LivePhotoComposeViewModel(application: Application) : AndroidViewModel(app
         }
     }
 
+    /**
+     * 合成前预检：只拦真正无法处理的编码（VP9 / AV1 等）。
+     *
+     * 支持范围与 MediaCodecMp4Encoder 的白名单同源，HEVC 源可正常合成。
+     */
     private fun checkVideoCodec(videoUri: Uri): String? {
         return try {
             val extractor = MediaExtractor()
@@ -238,10 +244,11 @@ class LivePhotoComposeViewModel(application: Application) : AndroidViewModel(app
                 val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
                 if (mime.startsWith("video/")) {
                     extractor.release()
-                    if (!mime.contains("avc", ignoreCase = true) && !mime.contains("h264", ignoreCase = true)) {
-                        return "该视频无法合成Live图，因为视频非H.264编码！"
+                    return if (MediaCodecMp4Encoder.isCodecSupported(mime)) {
+                        null
+                    } else {
+                        "该视频编码为 $mime，暂不支持合成 Live 图（支持 H.264 / HEVC）"
                     }
-                    return null
                 }
             }
             extractor.release()

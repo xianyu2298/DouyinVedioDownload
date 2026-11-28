@@ -18,7 +18,7 @@ import java.nio.ByteOrder
  *
  * 实现原理：
  * 1. 从视频中提取一帧作为 JPEG 封面
- * 2. 将视频编码为 MP4（H.264 + AAC）
+ * 2. 将视频重封装为 MP4（H.264 / HEVC 等原编码直通，不做转码）
  * 3. 生成 XMP 元数据，描述 Motion Photo 结构
  * 4. 将 XMP 注入 JPEG APP1 段（跳过已有标记段，插入到正确位置）
  * 5. 将带 XMP 的 JPEG 与 MP4 拼接为 .MP.JPG 文件
@@ -130,7 +130,7 @@ object LivePhotoMaker {
     }
 
     /**
-     * 编码视频为 MP4
+     * 重封装视频为 MP4（原编码直通，不转码）
      */
     private fun encodeVideo(
         context: Context,
