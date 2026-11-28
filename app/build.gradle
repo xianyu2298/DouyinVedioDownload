@@ -15,8 +15,8 @@ android {
         applicationId "com.xianyu.vediodownload"
         minSdk 24
         targetSdk 34
-        versionCode 7
-        versionName "1.5"
+        versionCode 8
+        versionName "1.6"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -24,9 +24,34 @@ android {
         }
     }
 
+    // 签名配置从根目录 keystore.properties 读取（该文件已加入 .gitignore，不提交密码）。
+    // 文件格式：
+    //   storeFile=E:/软件签名/抖音无水印下载.jks
+    //   storePassword=***
+    //   keyAlias=***
+    //   keyPassword=***
+    def keystorePropsFile = rootProject.file("keystore.properties")
+    if (keystorePropsFile.exists()) {
+        def props = new Properties()
+        keystorePropsFile.withInputStream { props.load(it) }
+        signingConfigs {
+            release {
+                storeFile file(props['storeFile'])
+                storePassword props['storePassword']
+                keyAlias props['keyAlias']
+                keyPassword props['keyPassword']
+            }
+        }
+    }
+
     buildTypes {
         release {
-            minifyEnabled false
+            // 体积优化：R8 裁剪未使用代码 + 资源压缩（可剔除未引用字符串与 5000+ 未使用图标）
+            if (keystorePropsFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
@@ -58,13 +83,10 @@ android {
 dependencies {
     implementation libs.exifinterface
 
-    // FFmpeg Kit for video processing
-    implementation(name: 'ffmpeg-kit-full-gpl', ext: 'aar')
-    implementation(name: 'smart-exception-java', ext: 'jar')
+    // FFmpeg Kit（本地 aar + jniLibs，用于抽帧与音频导出）
     implementation(name: 'ffmpeg-kit-full-gpl', ext: 'aar')
     implementation(name: 'smart-exception-common', ext: 'jar')
     implementation(name: 'smart-exception-java', ext: 'jar')
-        // FFmpeg Kit for video processing
 
 
     // Compose BOM
@@ -91,14 +113,11 @@ dependencies {
     // Jackson
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.15.2'
 
-    // Gson
-    implementation 'com.google.code.gson:gson:2.10.1'
-
     // AndroidX
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
+    // Material 必须保留：themes.xml 的 Theme.Material3.Light.NoActionBar 来自这里
     implementation 'com.google.android.material:material:1.11.0'
-    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
 
     // Annotation
     implementation 'androidx.annotation:annotation:1.7.1'

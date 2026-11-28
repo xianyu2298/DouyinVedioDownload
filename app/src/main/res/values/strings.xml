@@ -117,11 +117,13 @@
     <string name="cache_cleared_with_downloads_toast">已清理 %1$s，并删除 %2$s 下载文件</string>
     <string name="history_home_title">下载历史记录</string>
     <string name="history_option_video">视频下载记录</string>
+    <string name="history_option_audio">音频下载记录</string>
     <string name="history_option_image">图片下载记录</string>
     <string name="history_option_live">Live 动态短片下载记录</string>
     <string name="history_option_live_composed">Live 图片合成记录</string>
     <string name="history_option_clear_all">删除所有历史记录</string>
     <string name="history_list_title_video">视频下载记录</string>
+    <string name="history_list_title_audio">音频下载记录</string>
     <string name="history_list_title_image">图片下载记录</string>
     <string name="history_list_title_live">Live 动态短片下载记录</string>
     <string name="history_list_title_live_composed">Live 图片合成记录</string>
@@ -174,7 +176,7 @@
     <string name="notify_channel_download_desc">显示后台批量下载的进度通知。</string>
     <string name="notify_title_downloading">正在下载（%1$d / %2$d）</string>
     <string name="notify_title_done">下载完成</string>
-    <string name="notify_text_done_success">%1$d 个文件已保存到相册</string>
+    <string name="notify_text_done_success">%1$d 个文件已保存（相册 / 音乐库）</string>
     <string name="notify_text_done_partial">%1$d 个成功，%2$d 个失败</string>
     <string name="notify_text_downloading">正在下载第 %1$d / %2$d 个</string>
     <string name="notify_title_composing">正在合成 Live 图（%1$d / %2$d）</string>

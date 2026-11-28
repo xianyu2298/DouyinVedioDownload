@@ -155,6 +155,7 @@ fun VideoScreen(
                     description = p.description,
                     videoUrl = p.videoUrl,
                     qualityLabel = p.qualityLabel,
+                    musicLabel = p.musicLabel,
                     onPreviewClick = {
                         val intent = Intent(context, VideoPlayerActivity::class.java).apply {
                             putExtra("video_url", p.videoUrl)
@@ -180,10 +181,28 @@ fun VideoScreen(
                     onClick = { viewModel.downloadVideo() },
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 音频来源由用户选择：同一作品可能同时存在曲库 BGM 与原声
+                NeumorphicButton(
+                    text = stringResource(R.string.btn_download_audio),
+                    onClick = { viewModel.requestAudioDownload() },
+                    modifier = Modifier.fillMaxWidth(),
+                    isPrimary = false,
+                )
             }
         }
 
         // 旧的 GlassCard 进度条已移除，改用弹窗（见文件底部）。
+    }
+
+    uiState.audioDialog?.let { dialog ->
+        AudioSourceDialog(
+            state = dialog,
+            onSelect = { viewModel.downloadAudio(it) },
+            onDismiss = { viewModel.dismissAudioDialog() },
+        )
     }
 
     // 批量下载进度弹窗：活动且未被用户手动关闭时显示

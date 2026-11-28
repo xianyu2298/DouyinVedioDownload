@@ -577,6 +577,17 @@ public final class DouyinDownloader {
     }
     String thumbnailUrl = thumbnailUrls.isEmpty() ? "" : thumbnailUrls.get(0);
 
+    // 背景音乐：music.title / music.author / music.play_url。
+    // 原声作品这三项常为空，此时「原声」只能从视频音轨提取（UI 侧据 musicUrl 是否为空判定）。
+    JsonNode music = aweme.path("music");
+    String musicTitle = music.path("title").asText("").trim();
+    String musicAuthor = music.path("author").asText("").trim();
+    String musicUrl = pickLastUrl(music.path("play_url").path("url_list")).orElse("");
+    if (musicUrl.isEmpty()) {
+      musicUrl = pickLastUrl(music.path("play_url_h264").path("url_list")).orElse("");
+    }
+    boolean musicIsOriginal = music.path("is_original").asBoolean(false);
+
     return new AwemeProfile(
         com.xianyu.vediodownload.model.Platform.DOUYIN,
         awemeId,
@@ -591,7 +602,11 @@ public final class DouyinDownloader {
         thumbnailUrls,
         downloadUrls,
         imageMediaTypes,
-        qualityLabel);
+        qualityLabel,
+        musicTitle,
+        musicAuthor,
+        musicUrl,
+        musicIsOriginal);
   }
 
   private String resolveSecUserId(String sourceText, String resolvedUrl, String cookie)

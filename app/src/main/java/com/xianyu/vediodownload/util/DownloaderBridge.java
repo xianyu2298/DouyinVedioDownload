@@ -156,6 +156,131 @@ public final class DownloaderBridge {
     /**
      * 媒体类型推断 + 文件扩展名推断（根据 URL 猜）
      */
+    /**
+     * 把任意媒体地址下载到指定临时文件（同步执行，调用方负责线程与清理）。
+     *
+     * <p>用于「下载音频」：先把 m4a 直链或视频下载到 cache，再交给 ffmpeg 抽轨/转码。
+     * 请求头按平台选择，与普通下载保持一致。
+     */
+    public void downloadUrlToFile(AwemeProfile profile,
+                                  String url,
+                                  File target,
+                                  String cookie,
+                                  ProgressListener progressListener) throws Exception {
+        boolean kuaishou = profile != null && profile.platform() == Platform.KUAISHOU;
+        String userAgent = kuaishou ? KUAISHOU_USER_AGENT : DEFAULT_USER_AGENT;
+        String referer = kuaishou ? KUAISHOU_REFERER : DEFAULT_REFERER;
+        String requestCookie = kuaishou ? "" : cookie;
+
+        HttpDownloader httpDownloader = new HttpDownloader(okHttp, userAgent, referer, requestCookie);
+        httpDownloader.download(
+                url,
+                target,
+                (progress, downloaded, total) -> {
+                    if (progressListener != null) {
+                        progressListener.onProgress(progress, downloaded, total);
+                    }
+                },
+                HttpDownloader.ExpectedContent.AUTO);
+    }
+
+    /**
+     * 把已生成的音频文件写入相册可见的 Music/DouyinDownloader。
+     *
+     * <p>Audio 集合在 Q+ 上同样需要 IS_PENDING 占位，语义与视频/图片一致；
+     * Q 以下走公共目录 + MediaScanner 扫描。
+     */
+    public String saveAudioToMediaStore(File source, String displayName) throws Exception {
+        String filename = ensureAudioExtension(displayName);
+        String mimeType = filename.toLowerCase().endsWith(".mp3") ? "audio/mpeg" : "audio/mp4";
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Audio.Media.DISPLAY_NAME, filename);
+            values.put(MediaStore.Audio.Media.MIME_TYPE, mimeType);
+            values.put(MediaStore.Audio.Media.RELATIVE_PATH,
+                    Environment.DIRECTORY_MUSIC + "/DouyinDownloader");
+            values.put(MediaStore.Audio.Media.IS_PENDING, 1);
+
+            Uri collection = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+            Uri itemUri = appContext.getContentResolver().insert(collection, values);
+            if (itemUri == null) {
+                throw new java.io.IOException("MediaStore.Audio insert failed");
+            }
+            try (OutputStream out = appContext.getContentResolver().openOutputStream(itemUri)) {
+                if (out == null) {
+                    throw new java.io.IOException("MediaStore.Audio openOutputStream failed");
+                }
+                copyFile(source, out);
+            }
+            ContentValues done = new ContentValues();
+            done.put(MediaStore.Audio.Media.IS_PENDING, 0);
+            appContext.getContentResolver().update(itemUri, done, null, null);
+            return itemUri.toString();
+        }
+
+        File dir = new File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                "DouyinDownloader");
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw new java.io.IOException("cannot create music dir: " + dir.getAbsolutePath());
+        }
+        File dest = uniqueFile(dir, filename);
+        try (FileInputStream in = new FileInputStream(source);
+             OutputStream out = new java.io.FileOutputStream(dest)) {
+            copyStream(in, out);
+        }
+        android.media.MediaScannerConnection.scanFile(
+                appContext, new String[] {dest.getAbsolutePath()}, new String[] {mimeType}, null);
+        return dest.getAbsolutePath();
+    }
+
+    private static void copyFile(File source, OutputStream out) throws Exception {
+        try (FileInputStream in = new FileInputStream(source)) {
+            copyStream(in, out);
+        }
+    }
+
+    private static void copyStream(java.io.InputStream in, OutputStream out) throws Exception {
+        byte[] buffer = new byte[8192];
+        int read;
+        while ((read = in.read(buffer)) != -1) {
+            out.write(buffer, 0, read);
+        }
+        out.flush();
+    }
+
+    /** 音频扩展名由实际编码决定（mp3 源保留 mp3，AAC 用 m4a），缺失时默认 m4a。 */
+    private static String ensureAudioExtension(String name) {
+        String safe = (name == null || name.trim().isEmpty()) ? "audio" : name.trim();
+        String lower = safe.toLowerCase();
+        if (lower.endsWith(".mp3") || lower.endsWith(".m4a") || lower.endsWith(".aac")) {
+            return safe;
+        }
+        return safe + ".m4a";
+    }
+
+    /** 重名时追加 (1)(2)…，避免覆盖用户已有文件。 */
+    private static File uniqueFile(File dir, String filename) {
+        File candidate = new File(dir, filename);
+        if (!candidate.exists()) {
+            return candidate;
+        }
+        String base = filename;
+        String ext = "";
+        int dot = filename.lastIndexOf('.');
+        if (dot > 0) {
+            base = filename.substring(0, dot);
+            ext = filename.substring(dot);
+        }
+        for (int i = 1; i < 1000; i++) {
+            File next = new File(dir, base + " (" + i + ")" + ext);
+            if (!next.exists()) {
+                return next;
+            }
+        }
+        return new File(dir, base + "_" + System.currentTimeMillis() + ext);
+    }
+
     private String inferExtensionGuess(String url) {
         String lower = url.toLowerCase();
         if (lower.contains(".mp4") || lower.contains("video")) return ".mp4";

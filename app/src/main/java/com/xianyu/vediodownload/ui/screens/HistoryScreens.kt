@@ -36,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayCircle
@@ -124,6 +125,11 @@ enum class HistoryCategory(
      * 注意：这个目录不在 DouyinDownloader/ 壳下，扫描时单独走分支。
      */
     LIVE_COMPOSED_PHOTO("LivePhotos", "LivePhotos", "LivePhotos"),
+    /**
+     * 下载的音频：Music/DouyinDownloader/ 下的 mp3。
+     * 走 MediaStore.Audio，与视频/图片不是同一个集合。
+     */
+    AUDIO("Music", "Music", "Music"),
 }
 
 data class HistoryItem(
@@ -218,6 +224,14 @@ fun HistoryHomeScreen(
             icon = Icons.Filled.PhotoCamera,
             title = stringResource(R.string.history_option_live),
             onClick = onOpenLivePhotos,
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        HistoryOptionRow(
+            icon = Icons.Filled.MusicNote,
+            title = stringResource(R.string.history_option_audio),
+            onClick = { onOpenCategory(HistoryCategory.AUDIO) },
         )
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -792,24 +806,36 @@ private fun HistoryListRow(
                 .background(Color(0x30000000)),
             contentAlignment = Alignment.Center,
         ) {
-            if (item.category == HistoryCategory.VIDEO) {
-                VideoThumbnail(
-                    uri = item.uri,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                Icon(
-                    imageVector = Icons.Filled.PlayCircle,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.85f),
-                    modifier = Modifier.size(28.dp),
-                )
-            } else {
-                AsyncImage(
-                    model = item.uri,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
+            when (item.category) {
+                HistoryCategory.VIDEO -> {
+                    VideoThumbnail(
+                        uri = item.uri,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    Icon(
+                        imageVector = Icons.Filled.PlayCircle,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.size(28.dp),
+                    )
+                }
+                HistoryCategory.AUDIO -> {
+                    // 音频没有画面，用图标占位，避免 AsyncImage 请求音频 URI 失败
+                    Icon(
+                        imageVector = Icons.Filled.MusicNote,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.size(28.dp),
+                    )
+                }
+                else -> {
+                    AsyncImage(
+                        model = item.uri,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
 
@@ -1018,6 +1044,8 @@ private fun scanViaMediaStore(context: Context, category: HistoryCategory): List
             MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         HistoryCategory.IMAGE, HistoryCategory.LIVE_IMAGE, HistoryCategory.LIVE_COMPOSED_PHOTO ->
             MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        HistoryCategory.AUDIO ->
+            MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
     }
 
     val projection = arrayOf(
@@ -1037,6 +1065,9 @@ private fun scanViaMediaStore(context: Context, category: HistoryCategory): List
         // 单独走分支，避免被 Pictures/DouyinDownloader/% 兜底逻辑误匹配到。
         HistoryCategory.LIVE_COMPOSED_PHOTO ->
             "${Environment.DIRECTORY_PICTURES}/${category.mediaStoreRelativePath}/%"
+        // 音频在 Music/DouyinDownloader/，与视频/图片不在同一个顶层目录
+        HistoryCategory.AUDIO ->
+            "${Environment.DIRECTORY_MUSIC}/$ALBUM_NAME/%"
         else ->
             "${rootMediaStorePrefix()}${category.mediaStoreRelativePath}/%"
     }
@@ -1093,6 +1124,10 @@ private fun scanViaFileSystem(category: HistoryCategory): List<HistoryItem> {
         HistoryCategory.LIVE_COMPOSED_PHOTO -> File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
             "LivePhotos",
+        )
+        HistoryCategory.AUDIO -> File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+            "DouyinDownloader",
         )
         else -> File(rootBaseDir(), category.fileSystemChild)
     }

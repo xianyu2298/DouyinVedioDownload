@@ -13,6 +13,7 @@ import android.util.Log
 import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.ReturnCode
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 
@@ -128,6 +129,71 @@ object FFmpegUtils {
             )
         } catch (e: Exception) {
             Log.e(TAG, "encodeToMp4 failed", e)
+            false
+        }
+    }
+
+    /**
+     * 导出音频文件（**不依赖 libmp3lame**）。
+     *
+     * 本工程打包的 ffmpeg-kit 未编译 libmp3lame：arm64 的 libffmpeg.so 里没有该编码器，
+     * 执行 `-c:a libmp3lame` 会直接报 `Unknown encoder 'libmp3lame'`。
+     *
+     * 因此改为「优先流复制」：
+     *  - 源是 mp3（抖音曲库直链常见）→ 输出 .mp3，无损且瞬时完成
+     *  - 源是 AAC（视频音轨）→ 输出 .m4a，同样不重新编码
+     *  - 复制失败再退回 AAC 转码（192k）
+     *
+     * @param outputDir 输出目录
+     * @param baseName  不含扩展名的文件名
+     * @return 实际生成的文件；失败返回 null（<10KB 视为空轨）
+     */
+    fun exportAudio(inputPath: String, outputDir: String, baseName: String): File? {
+        val input = File(inputPath)
+        if (!input.exists() || input.length() == 0L) return null
+        File(outputDir).mkdirs()
+
+        val extension = if (looksLikeMp3(input)) "mp3" else "m4a"
+        val copied = File(outputDir, "$baseName.$extension")
+        val copyCmd = buildString {
+            append("-y -i \"${input.absolutePath}\" ")
+            append("-vn -c:a copy -map_metadata -1 ")
+            append("\"${copied.absolutePath}\"")
+        }
+        if (executeFFmpeg(copyCmd) && copied.length() > 10 * 1024) {
+            return copied
+        }
+        //noinspection ResultOfMethodCallIgnored
+        copied.delete()
+
+        val transcoded = File(outputDir, "$baseName.m4a")
+        val transcodeCmd = buildString {
+            append("-y -i \"${input.absolutePath}\" ")
+            append("-vn -c:a aac -b:a 192k -map_metadata -1 ")
+            append("\"${transcoded.absolutePath}\"")
+        }
+        return if (executeFFmpeg(transcodeCmd) && transcoded.length() > 10 * 1024) {
+            transcoded
+        } else {
+            //noinspection ResultOfMethodCallIgnored
+            transcoded.takeIf { it.exists() }?.delete()
+            null
+        }
+    }
+
+    /** 读文件头判断是否 mp3：ID3 标签（"ID3"）或 MPEG 帧同步字（0xFFE0）。 */
+    private fun looksLikeMp3(file: File): Boolean {
+        return try {
+            val head = ByteArray(3)
+            val read = FileInputStream(file).use { it.read(head) }
+            if (read < 2) return false
+            val b0 = head[0].toInt() and 0xFF
+            val b1 = head[1].toInt() and 0xFF
+            if (read == 3 && b0 == 0x49 && b1 == 0x44 && (head[2].toInt() and 0xFF) == 0x33) {
+                return true
+            }
+            b0 == 0xFF && (b1 and 0xE0) == 0xE0
+        } catch (e: Exception) {
             false
         }
     }

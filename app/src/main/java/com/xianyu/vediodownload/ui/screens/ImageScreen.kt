@@ -296,6 +296,16 @@ fun ImageScreen(
                             isDanger = true,
                         )
                     }
+
+                    // 图文作品同样可能有曲库 BGM（Live 图还带原声），入口与视频页保持一致
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    NeumorphicButton(
+                        text = stringResource(R.string.btn_download_audio),
+                        onClick = { viewModel.requestAudioDownload() },
+                        modifier = Modifier.fillMaxWidth(),
+                        isPrimary = false,
+                    )
                 }
             }
         }
@@ -308,6 +318,14 @@ fun ImageScreen(
         BatchDownloadProgressDialog(
             session = session,
             onBackground = { viewModel.dismissBatchDialog() },
+        )
+    }
+
+    uiState.audioDialog?.let { dialog ->
+        AudioSourceDialog(
+            state = dialog,
+            onSelect = { viewModel.downloadAudio(it) },
+            onDismiss = { viewModel.dismissAudioDialog() },
         )
     }
 }

@@ -5,7 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -54,7 +54,8 @@ fun NeumorphicInputField(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = 56.dp)
+            // 固定高度：链接是一行文本，让输入框随内容长高会顶掉下方按钮
+            .height(56.dp)
             .glassConcave(cornerRadius = 16.dp)
             .border(
                 width = if (isFocused) 1.5.dp else 0.5.dp,
@@ -73,6 +74,7 @@ fun NeumorphicInputField(
                     value = value,
                     onValueChange = onValueChange,
                     modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
                     textStyle = LocalTextStyle.current.copy(
                         color = tokens.textPrimary,
                         fontSize = 16.sp

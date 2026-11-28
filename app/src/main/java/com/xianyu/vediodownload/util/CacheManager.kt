@@ -40,6 +40,12 @@ object CacheManager {
         ALBUM_NAME,
     )
 
+    /** Music 根目录：/sdcard/Music/DouyinDownloader/（音频下载，文件直接放壳目录下）。 */
+    fun musicRootDir(): File = File(
+        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+        ALBUM_NAME,
+    )
+
     /** 合成 Live 图根目录：/sdcard/Pictures/LivePhotos/（不在 DouyinDownloader/ 壳下）。 */
     fun livePhotosRootDir(): File = File(
         Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
@@ -52,7 +58,8 @@ object CacheManager {
      *   - Pictures/DouyinDownloader/
      *   - Pictures/LivePhotos/   （合成 Live 图，壳目录本身就是数据目录）
      */
-    private fun downloadRoots(): List<File> = listOf(moviesRootDir(), rootDir(), livePhotosRootDir())
+    private fun downloadRoots(): List<File> =
+        listOf(moviesRootDir(), rootDir(), livePhotosRootDir(), musicRootDir())
 
     /** Movies 根目录对应的 MediaStore 前缀（视频类都从这里走）。 */
     private fun moviesMediaStorePrefix(): String =
@@ -83,10 +90,11 @@ object CacheManager {
                 // LivePhotos/ 直接放合成 Live 图（.MP.JPG），目录本身就是数据目录
                 total += root.sumBytes()
             } else {
-                // 两个 DouyinDownloader/ 壳目录：壳本身不计，只统计壳下的子目录
-                (root.listFiles() ?: emptyArray())
-                    .filter { it.isDirectory }
-                    .forEach { sub -> total += sub.sumBytes() }
+                // 三个 DouyinDownloader/ 壳目录：壳本身不计；
+                // 子目录按整体统计，壳下直接放的文件（音频）单独计入
+                (root.listFiles() ?: emptyArray()).forEach { child ->
+                    total += if (child.isDirectory) child.sumBytes() else child.length()
+                }
             }
         }
         total
@@ -144,6 +152,15 @@ object CacheManager {
             )
         } catch (_: Throwable) { /* ignore */ }
 
+        // 音频：Music/DouyinDownloader/（Audio 是独立集合，必须单独删）
+        try {
+            context.contentResolver.delete(
+                MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+                arrayOf("${Environment.DIRECTORY_MUSIC}/$ALBUM_NAME/%"),
+            )
+        } catch (_: Throwable) { /* ignore */ }
+
         // 合成 Live 图：Pictures/LivePhotos/（不在 DouyinDownloader/ 壳目录下）
         try {
             context.contentResolver.delete(
@@ -162,14 +179,15 @@ object CacheManager {
                 // LivePhotos/ 直接放文件：目录本身保留，逐文件删除
                 root.listFiles()?.forEach { f -> runCatching { f.delete() } }
             } else {
-                // 两个 DouyinDownloader/ 壳目录：每个子目录里的文件逐个删；子目录和壳目录都不动
-                (root.listFiles() ?: emptyArray())
-                    .filter { it.isDirectory }
-                    .forEach { sub ->
-                        sub.listFiles()?.forEach { f ->
-                            runCatching { f.delete() }
-                        }
+                // 三个 DouyinDownloader/ 壳目录：子目录里的文件逐个删（目录保留），
+                // 壳下直接放的文件（音频）也要删
+                (root.listFiles() ?: emptyArray()).forEach { child ->
+                    if (child.isDirectory) {
+                        child.listFiles()?.forEach { f -> runCatching { f.delete() } }
+                    } else {
+                        runCatching { child.delete() }
                     }
+                }
             }
         }
     }

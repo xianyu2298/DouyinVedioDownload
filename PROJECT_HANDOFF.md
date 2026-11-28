@@ -722,6 +722,103 @@ fetchAwemeDetail try: ...
 
 ## 17. 变更记录
 
+### 2026-11-28（v1.6 发版）：音频下载 + 体积优化
+
+v1.6（versionCode 8）打包内容：
+
+- 音频下载（三种来源选项，见 17 节「音频下载」）
+- ffmpeg 无 lame → 改为无损直通导出
+- 输入框恢复固定高度
+- Live 作品仅允许背景音乐
+- release 开启 R8 + 资源压缩，58 MB → 39 MB
+- 链接解析健壮性 + 一键诊断（v1.5 已包含，见下方）
+
+### 2026-11-28：release 体积优化（58 MB → 38.3 MB）
+
+**根因**：`release` 一直是 `minifyEnabled false` 且无签名配置，实际分发的是 debug 包；同时引入了 `material-icons-extended`（33 MB aar），但只用 8 个图标。
+
+| 改动 | 说明 |
+|------|------|
+| `release` 开 R8 + 资源压缩 | `minifyEnabled true` / `shrinkResources true`，dex 从 63 MB 降到 **5.9 MB**（未使用图标被整体裁掉） |
+| 删除无用依赖 | `gson`（零引用，JSON 全走 Jackson）、`constraintlayout`（零引用） |
+| 保留 `material` | 主题 `Theme.Material3.Light.NoActionBar` 来自该库，删掉会直接 aapt 链接失败 |
+| 去重依赖声明 | `ffmpeg-kit-full-gpl`、`smart-exception-java` 各重复一次 |
+| 重写 `proguard-rules.pro` | 删掉 Gson 规则；保留 Jackson（databind/core/annotation）、ffmpeg-kit（JNI 回调按类名查找）、OkHttp |
+| 条件式签名 | 根目录 `keystore.properties` 存在时才启用 `signingConfigs.release`；该文件已在 `.gitignore`（第 47 行） |
+
+**实测体积**（同一份代码）：
+
+| 产物 | 体积 |
+|------|------|
+| debug（原分发包） | 58 MB |
+| release 通用（arm64 + v7a） | **38.3 MB** |
+| release 仅 arm64 | 27.0 MB |
+| release 仅 armeabi-v7a | 16.6 MB |
+
+剩余体积几乎全是原生库：arm64 21.76 MB + v7a 11.34 MB（ffmpeg full-gpl）。再往下只能精简 ffmpeg 构建或做 ABI 拆分。
+
+**待办**：release 包目前未签名（无 `keystore.properties`），需补签名后才能分发；R8 后需真机冒烟（解析 / 下载 / 音频导出 / Live 合成）。
+
+
+### 2026-11-22（补 7）：音频下载（背景音乐 / 原声可选，统一 mp3）
+
+视频页在「下载无水印视频」下方新增「下载音频」，点击后弹窗选择来源；图文页与 Live 页同样提供入口。
+
+| 选项 | 判定条件 | 数据来源 |
+|------|---------|---------|
+| 背景音乐 | `music.play_url` 非空且非原声作品 | 曲库 BGM 直链（纯 BGM，无人声） |
+| 原声（纯原声） | `music.is_original = true` | 视频音轨——此类作品未添加 BGM，音轨本身即纯原声 |
+| 原声 + 背景音乐 | 非原声作品且有视频流 | 视频音轨——人声与 BGM 已在服务端混合，无法拆分 |
+
+弹窗按作品实际情况动态生成选项（`AudioDialogState.options`），不是固定两行：原声作品只出现「原声（纯原声）」，曲库作品出现「背景音乐 + 原声 + 背景音乐」两条。
+
+**为什么没有"从混合音轨里分离出纯原声"**：抖音下发的视频只有一条 AAC 音轨，博主录音与 BGM 已混合，接口不提供可分离的第二条流。唯一独立的音频资产是 `music.play_url`（纯 BGM）。要做真正的原声分离，只能引入 AI 声源分离模型（ONNX，数十至上百 MB），成本与效果都不划算，暂不做。
+
+不可用的来源在弹窗中置灰并注明原因（原声作品无 BGM / 纯图片无音轨），不做自动选择——同一作品可能两者并存且内容不同。
+
+| 文件 | 改动 |
+|------|------|
+| `AwemeProfile.java` | 新增 `musicTitle` / `musicAuthor` / `musicUrl` 与 `hasBackgroundMusic()` |
+| `DouyinDownloader.java` | 解析 `music.title` / `music.author` / `play_url`（含 `play_url_h264` 兜底） |
+| `FFmpegUtils.kt` | 新增 `extractAudioToMp3()`：`-vn -c:a libmp3lame -q:a 2 -map_metadata -1`，输出 <10KB 视为失败 |
+| `DownloaderBridge.java` | `downloadUrlToFile()`（按平台选 UA/Referer/Cookie）+ `saveAudioToMediaStore()`（MediaStore.Audio → `Music/DouyinDownloader`，Q 以下走 MediaScanner） |
+| `DownloadViewModel.kt` | `AudioSource` 枚举、`AudioDialogState`、`requestAudioDownload()` / `downloadAudio()` / 转码管线（下载占 0–85% 进度，转码 90%） |
+| `AudioSourceDialog.kt`（新增） | 来源选择弹窗 |
+| `PreviewCards.kt` | 视频卡显示「🎵 歌名 · 歌手」 |
+| `VideoScreen` / `ImageScreen` / `LiveScreen` | 按钮 + 弹窗接入 |
+| `HistoryScreens.kt` | 新增 `AUDIO` 分类（枚举 / 首页入口 / 图标 / MediaStore 与文件系统两条扫描分支） |
+| `SettingsScreen.kt` | `SubPage.HISTORY_AUDIO` 及跳转、返回键分支 |
+| `CacheManager.kt` | 统计与「清空下载」覆盖 `Music/DouyinDownloader`（Audio 是独立集合，必须单独删；壳目录下直接放文件，原逻辑只扫子目录会漏） |
+
+**验证**：用合成 `aweme` JSON 反射调用 `collectAwemeProfileFromNode`，三种情况均正确——
+有 BGM（title/author/url 齐全）、原声（url 为空、author 有值）、图文（IMAGE + BGM 可用）；
+`assembleDebug` BUILD SUCCESSFUL。
+
+### 2026-11-28 修正：ffmpeg 无 libmp3lame，改为无损直通
+
+真机日志暴露两个事实：
+
+1. 设备跑的是 **arm64 ffmpeg**（来自 aar 的 `jni/arm64-v8a/*.so`），而该构建的 configuration 里**没有**
+   `--enable-libmp3lame`，执行 `-c:a libmp3lame` 直接报 `Unknown encoder 'libmp3lame'`；
+2. 工程里 `jniLibs/armeabi-v7a/libmp3lame.so` 是另一套 32 位库，`grep libffmpeg.so` 命中的那个字符串
+   属于它，**不能代表 arm64 可用**——之前据此判断「lame 可用」是错的。
+
+改为 `FFmpegUtils.exportAudio()`：
+
+| 源 | 处理 | 产物 |
+|----|------|------|
+| mp3（曲库直链常见，日志实测 `Audio: mp3 ... 128 kb/s`） | `-c:a copy` | `.mp3`，无损瞬时 |
+| AAC（视频音轨） | `-c:a copy` | `.m4a`，无损瞬时 |
+| 复制失败 | `-c:a aac -b:a 192k` | `.m4a` |
+
+容器由文件头判定（`ID3` / `0xFFEx` → mp3，否则按 mp4 处理），入库 MIME 随扩展名变化
+（`audio/mpeg` / `audio/mp4`）。**结论：本工程无法输出 mp3 编码，只能保留源 mp3 或输出 AAC。**
+
+已知遗留：aar 内 .so 未做 16 KB 页对齐，Android 15+ 的 16 KB 设备会弹「应用兼容性」提示；
+需要重编 ffmpeg（NDK r28+）才能消除。
+
+**已知限制**：Live 图不提供原声下载（只给 BGM，多段短片音轨拼接会重复）；原声作品需先下载整段视频；工程同时打包两套 ABI 的 ffmpeg，以 arm64 为准。
+
 ### 2026-11-22（补 6）：短链不 302 的兜底
 
 **现场证据**（用户 v1.5 诊断）：`resolved=https://v.douyin.com/QYXvVGm5Zxs/`，即**最终地址与输入完全相同**，说明 302 根本没发生。同一链接在本机用 curl / JVM 请求均正常 302 到 `www.iesdouyin.com/share/video/7708635826690788618/`。结论：部分网络环境下短链服务返回 200 落地页而非 302。
@@ -1057,6 +1154,8 @@ GET https://gitee.com/api/v5/repos/jbl2003/DouyinVedioDownload/releases/latest
 | 快手字段映射 | kuaishou/KuaishouPhotoParser.java | `parse(photo, photoIdToken)` |
 | 解析模式读写 | util/PlatformModeManager.java | `getMode()` / `setMode()` |
 | 检查更新 | update/UpdateChecker.java | `check(ignoreCache)` / `isNewer()` |
+| 音频转码 | util/FFmpegUtils.kt | `extractAudioToMp3()` |
+| 音频入库 | util/DownloaderBridge.java | `saveAudioToMediaStore()` |
 | 更新弹窗 | ui/screens/UpdateDialog.kt | `UpdateDialog()` |
 | 解析单个作品 | DouyinDownloader.java | `collectWorkInfo()` |
 | 抖音清晰度标注 | DouyinDownloader.java | `buildVideoQualityLabel()` |

@@ -50,7 +50,7 @@ import kotlinx.coroutines.withContext
  *  - SubPage.HISTORY_VIDEO / IMAGE / LIVE → 对应分类列表
  *  - SubPage.LIVE_COMPOSE → Live 图合成页面
  */
-private enum class SubPage { HISTORY_HOME, HISTORY_VIDEO, HISTORY_IMAGE, HISTORY_LIVE, HISTORY_LIVE_COMPOSED, LIVE_COMPOSE }
+private enum class SubPage { HISTORY_HOME, HISTORY_VIDEO, HISTORY_IMAGE, HISTORY_LIVE, HISTORY_LIVE_COMPOSED, HISTORY_AUDIO, LIVE_COMPOSE }
 
 @Composable
 fun SettingsScreen(
@@ -77,7 +77,8 @@ fun SettingsScreen(
             null -> null
             SubPage.HISTORY_HOME -> null
             SubPage.HISTORY_VIDEO, SubPage.HISTORY_IMAGE,
-            SubPage.HISTORY_LIVE, SubPage.HISTORY_LIVE_COMPOSED -> SubPage.HISTORY_HOME
+            SubPage.HISTORY_LIVE, SubPage.HISTORY_LIVE_COMPOSED,
+            SubPage.HISTORY_AUDIO -> SubPage.HISTORY_HOME
             SubPage.LIVE_COMPOSE -> null
         }
     }
@@ -119,6 +120,7 @@ fun SettingsScreen(
                         HistoryCategory.LIVE_IMAGE, HistoryCategory.LIVE_VIDEO ->
                             SubPage.HISTORY_LIVE
                         HistoryCategory.LIVE_COMPOSED_PHOTO -> SubPage.HISTORY_LIVE_COMPOSED
+                        HistoryCategory.AUDIO -> SubPage.HISTORY_AUDIO
                     }
                 },
                 onOpenLivePhotos = { subPage = SubPage.HISTORY_LIVE },
@@ -141,6 +143,11 @@ fun SettingsScreen(
                 // 直接复用 HistoryListScreen：合成 Live 图是扁平列表（非配对），用通用列表 UI 即可
                 title = stringResource(R.string.history_list_title_live_composed),
                 category = HistoryCategory.LIVE_COMPOSED_PHOTO,
+                onBack = { subPage = SubPage.HISTORY_HOME },
+            )
+            SubPage.HISTORY_AUDIO -> HistoryListScreen(
+                title = stringResource(R.string.history_list_title_audio),
+                category = HistoryCategory.AUDIO,
                 onBack = { subPage = SubPage.HISTORY_HOME },
             )
             SubPage.LIVE_COMPOSE -> LivePhotoComposeScreenContent(

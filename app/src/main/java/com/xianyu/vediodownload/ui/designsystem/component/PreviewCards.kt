@@ -41,6 +41,7 @@ fun VideoPreviewCard(
     description: String = "",
     videoUrl: String = "",
     qualityLabel: String = "",
+    musicLabel: String = "",
     onPreviewClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -230,6 +231,17 @@ fun VideoPreviewCard(
                 fontSize = 12.sp,
                 color = tokens.textTertiary,
                 maxLines = 1
+            )
+        }
+
+        if (musicLabel.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "🎵 $musicLabel",
+                fontSize = 12.sp,
+                color = tokens.textTertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }

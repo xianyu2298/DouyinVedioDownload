@@ -1,23 +1,28 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# ===== 体积优化相关的 keep 规则 =====
+# 目标：让 R8 尽量裁剪，同时保证 Jackson / ffmpeg-kit / OkHttp 在 release 下正常工作。
 
-# Keep Gson serialization classes
--keepattributes Signature
--keepattributes *Annotation*
+# 注解与泛型签名：Jackson 与 Serializable 依赖
+-keepattributes Signature,*Annotation*,InnerClasses,EnclosingMethod
 
-# Gson specific classes
--dontwarn sun.misc.**
--keep class com.google.gson.stream.** { *; }
+# ---------- Jackson ----------
+# 项目只使用树模型（ObjectMapper.readTree / JsonNode），但 Jackson 内部仍通过反射
+# 加载序列化器与模块，因此保留 databind 与 core 的类名，避免运行期 NoSuchMethod。
+-keep class com.fasterxml.jackson.databind.** { *; }
+-keep class com.fasterxml.jackson.core.** { *; }
+-keep class com.fasterxml.jackson.annotation.** { *; }
+-dontwarn com.fasterxml.jackson.**
 
-# Keep model classes used by Gson
--keep class com.douyin.downloader.model.** { *; }
+# ---------- ffmpeg-kit ----------
+# 原生层通过 JNI 以类名/方法名回调 Java 层，混淆后会导致命令回调丢失。
+-keep class com.arthenica.ffmpegkit.** { *; }
+-keep class com.arthenica.smartexception.** { *; }
+-dontwarn com.arthenica.**
 
-# OkHttp rules
+# ---------- OkHttp ----------
 -dontwarn okhttp3.**
 -dontwarn okio.**
 -dontwarn javax.annotation.**
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**
 -keepnames class okhttp3.internal.publicsuffix.PublicSuffixDatabase

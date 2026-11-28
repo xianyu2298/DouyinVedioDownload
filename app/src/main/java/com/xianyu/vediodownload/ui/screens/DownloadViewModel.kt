@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.util.Log
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
@@ -23,6 +24,7 @@ import com.xianyu.vediodownload.kuaishou.KuaishouDownloader
 import com.xianyu.vediodownload.model.Platform
 import com.xianyu.vediodownload.util.CookieManager
 import com.xianyu.vediodownload.util.DownloaderBridge
+import com.xianyu.vediodownload.util.FFmpegUtils
 import com.xianyu.vediodownload.util.ForegroundDownloadNotifier
 import com.xianyu.vediodownload.util.LivePhotoMaker
 import com.xianyu.vediodownload.util.PlatformModeManager
@@ -60,17 +62,27 @@ data class MediaPreview(
     val imageUrls: String = "",   // 图片URL列表，用 ||| 分隔
     val liveVideoUrls: String = "",  // Live图视频URL列表，用 ||| 分隔
     val liveCoverUrls: String = "",   // Live图封面URL列表，用 ||| 分隔
-    val qualityLabel: String = ""     // 清晰度标注（"720p · 30fps"），快手作品如实展示
+    val qualityLabel: String = "",    // 清晰度标注（"720p · 30fps"），快手作品如实展示
+    val musicLabel: String = ""       // 背景音乐标注（"歌名 · 歌手"），无则空字符串
 )
 
-/**
- * 一次批量下载的会话状态。每次有下载任务开始就创建一个新会话。
- *
- * - [current] / [total]：1-based 当前文件序号 / 文件总数（用于弹窗与通知展示"第 N / M 个"）。
- * - [percent]：当前文件的下载进度（0..100）。整体进度 = (current-1 + percent/100) / total * 100。
- * - [dialogDismissed]：用户是否点击过"后台下载"。为 true 时弹窗不再显示，但下载仍继续。
- * - [successCount] / [failureCount]：本批次已完成的成功 / 失败计数，用于批次结束后的 Toast。
- */
+/** 音频来源：曲库背景音乐 / 纯原声 / 原声与背景音乐的混合音轨。 */
+enum class AudioSource { BACKGROUND_MUSIC, PURE_ORIGINAL, MIXED_ORIGINAL }
+
+/** 弹窗中的一个音频选项。 */
+data class AudioOption(
+    val source: AudioSource,
+    val title: String,
+    val description: String,
+    val enabled: Boolean,
+)
+
+/** 「下载音频」弹窗状态：按作品实际情况动态生成选项。 */
+data class AudioDialogState(
+    val musicLabel: String = "",
+    val options: List<AudioOption> = emptyList(),
+)
+
 data class BatchSession(
     val total: Int = 0,
     val current: Int = 0,
@@ -81,15 +93,6 @@ data class BatchSession(
     val active: Boolean = false,
 )
 
-/**
- * Live 图批量合成会话：完成下载后进入此会话，依次合成每对 cover + video。
- *
- * - [current] / [total]：1-based 当前合成序号 / 总对数。
- * - [percent]：当前合成步骤的内部进度（0..100）。
- * - [dialogDismissed]：用户是否点过"后台合成"，与 BatchSession 同语义。
- * - [successCount] / [failureCount]：成功合成 / 跳过的对数（cover 或 video 缺失视为跳过）。
- * - [phase]：当前阶段（DONE 表示整个流程已结束）。
- */
 enum class ComposePhase { DOWNLOADING, COMPOSING, DONE }
 
 data class LiveComposeSession(
@@ -106,7 +109,6 @@ data class LiveComposeSession(
 /**
  * 单对 cover + video 的下载结果（Live 图合成流水线的中间产物）。
  * 任一为 null 表示下载失败；合成阶段任一缺失即跳过整对。
- * 与 HistoryScreens.kt 中以 "baseName" 为键的历史对类型不同，本类用于 in-memory 流水线。
  */
 data class LiveComposePair(
     val coverUri: Uri? = null,
@@ -132,6 +134,8 @@ data class DownloadUiState(
     val batch: BatchSession? = null,
     // Live 图批量合成会话（null 表示当前无合成任务）
     val compose: LiveComposeSession? = null,
+    // 「下载音频」的来源选择弹窗（null 表示不显示）
+    val audioDialog: AudioDialogState? = null,
 )
 
 class DownloadViewModel(application: Application) : AndroidViewModel(application) {
@@ -185,6 +189,7 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                 isSelectionMode = false,
                 selectedImageIndices = emptySet(),
                 selectedLiveIndices = emptySet(),
+                audioDialog = null,
             )
         }
     }
@@ -289,7 +294,8 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                     imageUrls = imageUrls.joinToString("|||"),
                     liveVideoUrls = videoUrls.joinToString("|||"),
                     liveCoverUrls = imageUrls.joinToString("|||"),  // Live图的封面就是静态图片
-                    qualityLabel = profile.qualityLabel()
+                    qualityLabel = profile.qualityLabel(),
+                    musicLabel = buildMusicLabel(profile)
                 )
 
                 _uiState.update {
@@ -383,6 +389,226 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
         val profile = cachedProfile ?: return
         startBatch(total = 1) {
             downloadOne(profile, 0)
+        }
+    }
+
+    // ========== 下载音频 ==========
+
+    /**
+     * 弹出音频来源选择弹窗。
+     *
+     * 选项按作品实际情况动态生成，而不是固定的「背景音乐 / 原声」两条：
+     *  - 曲库音乐作品：背景音乐（纯 BGM）+ 原声 + 背景音乐（混合音轨）
+     *  - 原声作品（未加 BGM）：只有「原声（纯原声）」一个实质选项
+     *  - 图文作品：最多只有背景音乐
+     *  - Live 作品：只有背景音乐，原声项置灰
+     */
+    fun requestAudioDownload() {
+        val profile = cachedProfile ?: return
+        val live = isLiveWork(profile)
+        val videoUrl = firstVideoUrl(profile)
+        val hasVideo = videoUrl.isNotBlank()
+        // 使用原声的作品，musicUrl 指向的是原声录音本身，不是曲库 BGM
+        val pureOriginal = profile.musicIsOriginal()
+        val hasPureBgm = profile.musicUrl().isNotBlank() && !pureOriginal
+
+        val options = mutableListOf<AudioOption>()
+        if (hasPureBgm) {
+            options += AudioOption(
+                source = AudioSource.BACKGROUND_MUSIC,
+                title = "背景音乐",
+                description = "曲库里的那首歌，纯 BGM（不含人声）",
+                enabled = true,
+            )
+        }
+        if (hasVideo && pureOriginal) {
+            options += AudioOption(
+                source = AudioSource.PURE_ORIGINAL,
+                title = "原声（纯原声）",
+                description = "博主未添加背景音乐，这条音轨就是现场原声",
+                enabled = true,
+            )
+        }
+        if (hasVideo && !pureOriginal) {
+            options += AudioOption(
+                source = AudioSource.MIXED_ORIGINAL,
+                title = "原声 + 背景音乐",
+                description = if (live) {
+                    "Live 图不支持下载原声，请选择背景音乐"
+                } else {
+                    "视频音轨：现场原声与背景音乐已混合，抖音未提供可分离的纯原声"
+                },
+                enabled = !live,
+            )
+        }
+        if (!hasVideo) {
+            options += AudioOption(
+                source = AudioSource.MIXED_ORIGINAL,
+                title = "原声",
+                description = "该作品没有视频音轨（纯图片作品）",
+                enabled = false,
+            )
+        }
+
+        if (options.none { it.enabled }) {
+            _uiState.update {
+                it.copy(
+                    error = if (live) {
+                        "该作品没有背景音乐，Live 图不支持下载原声"
+                    } else {
+                        "该作品没有可下载的音频（无背景音乐，也没有音轨）"
+                    }
+                )
+            }
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                audioDialog = AudioDialogState(
+                    musicLabel = buildMusicLabel(profile),
+                    options = options,
+                )
+            )
+        }
+    }
+
+    fun dismissAudioDialog() {
+        _uiState.update { it.copy(audioDialog = null) }
+    }
+
+    /**
+     * 下载音频并转成 mp3。
+     *
+     * 两条来源最终都走同一条管线：下载源文件到 cache → ffmpeg 转 mp3 → 写入 Music/。
+     * 统一转码是为了让产物格式、命名、失败语义保持一致。
+     */
+    fun downloadAudio(source: AudioSource) {
+        val profile = cachedProfile ?: return
+        val sourceUrl = when (source) {
+            AudioSource.BACKGROUND_MUSIC -> profile.musicUrl()
+            AudioSource.PURE_ORIGINAL, AudioSource.MIXED_ORIGINAL ->
+                if (isLiveWork(profile)) "" else firstVideoUrl(profile)
+        }
+        _uiState.update { it.copy(audioDialog = null) }
+        if (sourceUrl.isBlank()) {
+            _uiState.update { it.copy(error = "该来源的音频不存在，请选择另一项") }
+            return
+        }
+
+        startBatch(total = 1) {
+            val success = runAudioPipeline(profile, sourceUrl, source)
+            mainHandler.post {
+                if (success) recordSuccess() else recordFailure()
+                advanceFile()
+                notifyProgressThrottled(force = true)
+                finalizeBatchIfFinished()
+            }
+        }
+    }
+
+    private suspend fun runAudioPipeline(
+        profile: AwemeProfile,
+        sourceUrl: String,
+        source: AudioSource,
+    ): Boolean = withContext(Dispatchers.IO) {
+        val app = getApplication<Application>()
+        val tempDir = File(app.cacheDir, "audio_tmp").apply { mkdirs() }
+        val stamp = System.currentTimeMillis()
+        // 源文件扩展名影响 ffmpeg 探测，直链按 m4a、原声按 mp4 给
+        val srcFile = File(
+            tempDir,
+            if (source == AudioSource.BACKGROUND_MUSIC) "src_$stamp.m4a" else "src_$stamp.mp4"
+        )
+        try {
+            downloaderBridge.downloadUrlToFile(
+                profile, sourceUrl, srcFile, cookieManager.getCookie()
+            ) { percent, _, _ ->
+                // 下载阶段占 0–85%，把剩余进度留给转码，避免进度条到 100% 后长时间停住
+                mainHandler.post {
+                    val batch = _uiState.value.batch ?: return@post
+                    _uiState.update {
+                        it.copy(batch = batch.copy(percent = (percent * 0.85f).toInt()))
+                    }
+                    notifyProgressThrottled()
+                }
+            }
+            if (!srcFile.exists() || srcFile.length() == 0L) {
+                Log.w("DownloadViewModel", "audio source download produced empty file")
+                return@withContext false
+            }
+            mainHandler.post {
+                val batch = _uiState.value.batch ?: return@post
+                _uiState.update { it.copy(batch = batch.copy(percent = 90)) }
+                notifyProgressThrottled(force = true)
+            }
+            // 不依赖 libmp3lame：源是 mp3 就复制成 mp3，是 AAC 就复制成 m4a，均不重新编码
+            val exported = FFmpegUtils.exportAudio(
+                srcFile.absolutePath, tempDir.absolutePath, "out_$stamp"
+            )
+            if (exported == null) {
+                Log.w("DownloadViewModel", "ffmpeg audio export failed: $source")
+                return@withContext false
+            }
+            try {
+                val displayName = buildAudioFileName(profile, source) + "." + exported.extension
+                downloaderBridge.saveAudioToMediaStore(exported, displayName)
+            } finally {
+                //noinspection ResultOfMethodCallIgnored
+                exported.delete()
+            }
+            true
+        } catch (e: Exception) {
+            Log.w("DownloadViewModel", "audio download failed", e)
+            false
+        } finally {
+            //noinspection ResultOfMethodCallIgnored
+            srcFile.delete()
+        }
+    }
+
+    /** Live 作品 = 图文结构 + 含动态短片。这类作品不允许下载原声。 */
+    private fun isLiveWork(profile: AwemeProfile): Boolean =
+        profile.mediaType() == MediaType.IMAGE &&
+            profile.imageMediaTypes().contains(MediaType.VIDEO)
+
+    /** 原声来源：纯视频取首个直链；图文 / Live 取第一个动态短片；纯图片返回空串。 */
+    private fun firstVideoUrl(profile: AwemeProfile): String {
+        val types = profile.imageMediaTypes()
+        if (types.isEmpty()) {
+            return profile.downloadUrls().firstOrNull().orEmpty()
+        }
+        val index = types.indexOfFirst { it == MediaType.VIDEO }
+        return if (index >= 0) profile.downloadUrls().getOrNull(index).orEmpty() else ""
+    }
+
+    private fun buildAudioFileName(profile: AwemeProfile, source: AudioSource): String {
+        val author = profile.authorNickname().trim()
+        val body = profile.desc().trim().ifEmpty {
+            (if (profile.platform() == Platform.KUAISHOU) "kuaishou_" else "douyin_") + profile.awemeId()
+        }
+        val suffix = when (source) {
+            AudioSource.BACKGROUND_MUSIC -> "_背景音乐"
+            AudioSource.PURE_ORIGINAL -> "_原声"
+            AudioSource.MIXED_ORIGINAL -> "_原声+背景音乐"
+        }
+        val raw = (if (author.isEmpty()) "" else author + "_") + body + suffix
+        return sanitizeAudioName(raw).take(80)
+    }
+
+    private fun sanitizeAudioName(name: String): String {
+        val cleaned = name.replace(Regex("[\\\\/:*?\"<>|\\r\\n\\t]"), "_").trim()
+        return cleaned.ifEmpty { "audio" }
+    }
+
+    /** 卡片上展示的音乐标注：歌名 · 歌手（相同则只显示一次）。 */
+    private fun buildMusicLabel(profile: AwemeProfile): String {
+        val title = profile.musicTitle()
+        val author = profile.musicAuthor()
+        return when {
+            title.isNotEmpty() && author.isNotEmpty() && author != title -> "$title · $author"
+            title.isNotEmpty() -> title
+            else -> author
         }
     }
 

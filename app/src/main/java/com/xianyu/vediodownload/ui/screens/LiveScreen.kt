@@ -345,6 +345,16 @@ fun LiveScreen(
                         isPrimary = false,
                         isDanger = true,
                     )
+
+                    // Live 图的音频：原声取第一段动态短片，另有 BGM 时由用户在弹窗中选择
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    NeumorphicButton(
+                        text = stringResource(R.string.btn_download_audio),
+                        onClick = { viewModel.requestAudioDownload() },
+                        modifier = Modifier.fillMaxWidth(),
+                        isPrimary = false,
+                    )
                 }
             }
         }
@@ -367,6 +377,14 @@ fun LiveScreen(
         LiveComposeProgressDialog(
             session = composeSession,
             onBackground = { viewModel.dismissComposeDialog() },
+        )
+    }
+
+    uiState.audioDialog?.let { dialog ->
+        AudioSourceDialog(
+            state = dialog,
+            onSelect = { viewModel.downloadAudio(it) },
+            onDismiss = { viewModel.dismissAudioDialog() },
         )
     }
 }
