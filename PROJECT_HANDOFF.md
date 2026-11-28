@@ -10,13 +10,14 @@
 
 ### 0.1 项目现状（2026-11-28）
 
-当前版本 **v1.6（versionCode 8）**，最新提交 `fd7ba00`，已推送 GitHub；Gitee 已发布 `v1.6`。
+当前版本 **v1.6（versionCode 8）**，最新提交 `e490014`，已推送 GitHub；Gitee 已发布 `v1.6`。
 
 解析、下载、Live 合成、预览、历史、缓存、检查更新、音频下载均可用。签名算法为 **bdms.js v1.0.1.19-fix.01**（192 字符 a_bogus + x-secsdk-web-signature）。
 
 - **快手支持**（2026-11-22）：设置页切换「抖音 / 快手」，单作品解析（视频 / 图集 / 单图），网页端最高 720p，详见第 18 节。
 - **检查更新**（2026-11-22）：Gitee Releases + 12 小时缓存，详见第 19 节。
 - **音频下载**（2026-11-28）：背景音乐 / 纯原声 / 原声+背景音乐三选项，无损直通导出，见第 17 节「补 7」。
+- **Live 图三星识别**（2026-11-28）：XMP 补写旧标准 `MicroVideo` 标签，修复「谷歌相册能识别、三星相册无动态角标」，见 10.2 与第 17 节。
 - **release 体积**（2026-11-28）：开 R8 后 58 MB → 39 MB。
 
 ### 0.1.1 当前待办（接手先看）
@@ -24,6 +25,7 @@
 | 事项 | 状态 | 说明 |
 |------|------|------|
 | v1.6 真机冒烟 | ⏳ 未做 | 重点验证 R8 后：抖音解析、快手解析、音频导出、Live 合成 |
+| Live 图三星角标复测 | ⏳ 未做 | 已补 `MicroVideo` 旧标签，需**重新合成**后确认三星相册出现「动态」角标；若仍失败按 10.2 末尾三条差异依次排查 |
 | 签名自动化 | ⏳ 未配置 | 在根目录建 `keystore.properties`（已在 .gitignore），即可用 `assembleRelease` 出签名包；目前仍靠 Studio 向导 |
 | Gitee 下载被加 `.zip` 后缀 | 🐞 待修 | Gitee 对 APK 返回 `Content-Type: application/zip`，部分浏览器据此改名。方案 B（应用内下载 + 唤起安装器，需 FileProvider + REQUEST_INSTALL_PACKAGES）已评估未实施 |
 | ABI 拆分 | 💤 未做 | 通用包 39 MB；仅 arm64 27 MB、仅 v7a 16.6 MB。用户仅 40 人且非技术用户，暂不拆 |
@@ -45,6 +47,7 @@
 | 不能只取第一个 URL | 分享文案里可能混入其他链接（剪贴板残留），必须扫描所有 URL 取第一个域名匹配的。 |
 | 特殊字符先归一化 | 输入法/转发会把 `//` 变全角、塞入零宽字符；`LinkTextNormalizer` 必须先跑，再做正则匹配。 |
 | 签名 UA 必须一致 | `DEFAULT_USER_AGENT`、`buildCommonWebParams` 的 browser_version、`ABogusGenerator` 的 UA 三者必须完全一致，否则签名校验失败。 |
+| Live 图要写两套 XMP | 只写新标准 `Camera:MotionPhoto` + `Container:Directory` 时，谷歌相册正常、**三星相册只显示静态图（无「动态」角标）**。必须同时写旧标准 `Camera:MicroVideo` 四标签，见 10.2。 |
 
 ### 0.4 签名失效时的处置
 
@@ -489,23 +492,39 @@ doDownload()：
 
 ### 10.2 XMP 元数据（关键）
 
+**必须同时写两套 Google 规范**，只写一套会出现「谷歌相册能识别、三星相册只认静态图」的分裂现象（2026-11-28 实测定位，见 17 节）：
+
+- **新标准 MotionPhoto + Container:Directory** → Google Photos / Pixel 读这套
+- **旧标准 MicroVideo** → 三星图库（Galaxy）按这套判定「动态」角标
+
 ```xml
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
-  <rdf:RDF ...>
+  <rdf:RDF xmlns:Camera="http://ns.google.com/photos/1.0/camera/" ...>
     <rdf:Description
+        Camera:MicroVideo="1"
+        Camera:MicroVideoVersion="1"
+        Camera:MicroVideoOffset="视频字节数"
+        Camera:MicroVideoPresentationTimestampUs="1000000"
         Camera:MotionPhoto="1"
         Camera:MotionPhotoVersion="1"
         Camera:MotionPhotoPresentationTimestampUs="1000000">
       <Container:Directory>
         <rdf:Seq>
-          <rdf:li>  <!-- 封面：image/jpeg -->
-          <rdf:li>  <!-- 视频：video/mp4，Length=视频字节数 -->
+          <rdf:li>  <!-- 封面：image/jpeg，Semantic=Primary -->
+          <rdf:li>  <!-- 视频：video/mp4，Semantic=MotionPhoto，Length=视频字节数 -->
         </rdf:Seq>
       </Container:Directory>
     </rdf:Description>
   </rdf:RDF>
 </x:xmpmeta>
 ```
+
+要点：
+
+- `MicroVideoOffset` 与 `Item:Length` 同值，都是**从文件末尾算起的视频字节数**（本实现中视频原样追加在 JPEG 之后，两者天然相等）。
+- 两套标准共用同一个 `http://ns.google.com/photos/1.0/camera/` 命名空间，故前缀名（`Camera:` / `GCamera:`）不影响 XML 解析；但若要逐字节对齐参考实现，应统一为 `GCamera:`。
+- 时间戳固定 `1000000`（1 秒），与参考实现 live-photo-conv 一致；三星原机文件用 `-1`，两者都能识别，无需改动。
+- **仍未对齐参考实现的差异**（用户要求暂缓，若三星仍不识别按此顺序排查）：主图 `Container:Item` 多了 `Item:Length="0"` / `Item:Padding="0"`；XMP APP1 段插在 APP0(JFIF) 之前且无 `<?xpacket?>` 包裹；内嵌 MP4 非 faststart（moov 在尾部，参考在头部）。
 
 ### 10.3 视频转码（FFmpegUtils + MediaCodecMp4Encoder）
 
@@ -736,6 +755,24 @@ fetchAwemeDetail try: ...
 ---
 
 ## 17. 变更记录
+
+### 2026-11-28：Live 图三星相册识别修复（补 MicroVideo 旧标准）
+
+**症状**：合成出的 `.MP.JPG` 在谷歌相册识别为 Live 图，三星相册只显示静态照片、没有「动态」角标。
+
+**定位方法（可复用）**：把参考实现（[wszqkzqk/live-photo-conv](https://github.com/wszqkzqk/live-photo-conv)）生成的同一张图与我们的输出作为两个原始文件，用脚本解析 JPEG 段表 + XMP + 内嵌 MP4 偏移做比对。**注意：截图、剪贴板粘贴会把文件转码成纯静态 JPEG，XMP 与视频全部丢失，必须用原始文件。**
+
+| 项 | 参考实现（三星可识别） | 本项目（不可识别） |
+|----|----------------------|-------------------|
+| 旧标准 MicroVideo 四标签 | 有 | **无 ← 主因** |
+| 前缀 | `GCamera:` | `Camera:`（URI 相同） |
+| 主图 Container:Item | 仅 Mime + Semantic | 多 `Length="0"`、`Padding="0"` |
+| XMP 段位置 / 包裹 | APP0 之后，带 `<?xpacket?>` | APP0 之前，裸 XML |
+| 内嵌 MP4 | faststart（moov 前置） | moov 在尾部 |
+
+**改动**：`LivePhotoMaker.buildXmp()` 增补 `Camera:MicroVideo` / `MicroVideoVersion` / `MicroVideoOffset`（= 视频字节数）/ `MicroVideoPresentationTimestampUs`，其余差异按用户要求暂缓（详见 10.2 末尾待排查清单）。
+
+**验证**：`:app:compileDebugKotlin --offline` 通过；已合成的旧文件不会变，需重新合成才生效。
 
 ### 2026-11-28（v1.6 发版）：音频下载 + 体积优化
 

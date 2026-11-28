@@ -168,7 +168,12 @@ object LivePhotoMaker {
     /**
      * 构建 XMP 元数据字符串
      *
-     * 严格对齐 Python build_xmp() 的输出格式（缩进、换行、xmlns）。
+     * 同时写两套 Google 规范，缺一不可：
+     *  - 新标准 MotionPhoto + Container:Directory —— Google Photos / Pixel 读这套
+     *  - 旧标准 MicroVideo（Offset 为"从文件末尾算起的视频字节数"）—— 三星图库按这套判定"动态"
+     *
+     * 实测：只写新标准时，谷歌相册识别为 Live 图，三星相册只显示静态照片（无"动态"角标）。
+     * 参考实现 wszqkzqk/live-photo-conv 的 LiveMaker.export() 也是两套一起写。
      */
     private fun buildXmp(mp4Size: Long, presentationTimestampUs: Long): String {
         return """<x:xmpmeta xmlns:x="adobe:ns:meta/">
@@ -177,6 +182,10 @@ object LivePhotoMaker {
              xmlns:Container="http://ns.google.com/photos/1.0/container/"
              xmlns:Item="http://ns.google.com/photos/1.0/container/item/">
         <rdf:Description
+            Camera:MicroVideo="1"
+            Camera:MicroVideoVersion="1"
+            Camera:MicroVideoOffset="$mp4Size"
+            Camera:MicroVideoPresentationTimestampUs="$presentationTimestampUs"
             Camera:MotionPhoto="1"
             Camera:MotionPhotoVersion="1"
             Camera:MotionPhotoPresentationTimestampUs="$presentationTimestampUs">
